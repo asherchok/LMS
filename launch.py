@@ -26,14 +26,29 @@ def python_exe():
     return os.path.join(VENV, 'bin', 'python')
 
 
+def venv_ok():
+    """Check the venv actually works, not just that files exist."""
+    try:
+        subprocess.check_call(
+            [python_exe(), '-c', 'import sys'],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        return True
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return False
+
+
 def setup():
-    if not os.path.exists(VENV):
+    if not venv_ok():
+        import shutil
+        if os.path.exists(VENV):
+            shutil.rmtree(VENV)
         print('[LMS] Creating virtual environment...')
         subprocess.check_call([sys.executable, '-m', 'venv', VENV])
 
     print('[LMS] Installing dependencies...')
     subprocess.check_call(
-        [pip_exe(), 'install', '-q', '-r', REQ],
+        [python_exe(), '-m', 'pip', 'install', '-q', '-r', REQ],
         stdout=subprocess.DEVNULL,
     )
 
