@@ -120,6 +120,8 @@
             <div class="add-block-row">
                 <button class="btn btn-secondary btn-sm" onclick="addBlock('code')">+ Code</button>
                 <button class="btn btn-secondary btn-sm" onclick="addBlock('markdown')">+ Commentary</button>
+                <button class="btn btn-secondary btn-sm" onclick="addBlock('image')">+ Image</button>
+                <button class="btn btn-secondary btn-sm" onclick="addBlock('video')">+ Video</button>
             </div>
         </div>
     </div>
@@ -147,6 +149,53 @@
         <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
             <button class="btn btn-secondary" onclick="closeRevisedPopup()">No</button>
             <button class="btn btn-success" onclick="confirmRevised()">Yes, Mark Revised</button>
+        </div>
+    </div>
+</div>
+<!-- Image modal -->
+<div class="modal-overlay hidden" id="imageModal" onclick="if(event.target===this)closeImageModal()">
+    <div class="modal media-modal">
+        <h2>Insert Image</h2>
+        <div class="form-group">
+            <label class="form-label">Image URL</label>
+            <div style="display:flex;gap:6px">
+                <input type="text" class="form-input" id="imageUrlInput" placeholder="https://...">
+                <button class="btn btn-primary btn-sm" onclick="insertImageFromUrl()">Insert</button>
+            </div>
+        </div>
+        <div class="media-divider"><span>or upload</span></div>
+        <div class="upload-zone" id="imageDropZone" onclick="pickImageFile()">
+            <div class="upload-zone-text">Drag & drop an image here, or click to browse</div>
+        </div>
+        <div id="imageUploadStatus" style="font-size:11px;color:var(--text-muted);margin-top:6px"></div>
+        <div class="form-actions">
+            <button class="btn btn-secondary" onclick="closeImageModal()">Cancel</button>
+        </div>
+    </div>
+</div>
+
+<!-- Video modal -->
+<div class="modal-overlay hidden" id="videoModal" onclick="if(event.target===this)closeVideoModal()">
+    <div class="modal media-modal">
+        <h2>Insert Video</h2>
+        <p style="font-size:11px;color:var(--text-muted);margin-top:-10px;margin-bottom:12px">
+            Paste a YouTube or video URL. The preview image will be fetched and cached locally.
+            If no preview is available, a placeholder thumbnail will be shown.
+        </p>
+        <div class="form-group">
+            <label class="form-label">Video URL (YouTube, etc.)</label>
+            <div style="display:flex;gap:6px">
+                <input type="text" class="form-input" id="videoUrlInput" placeholder="https://youtube.com/watch?v=...">
+                <button class="btn btn-primary btn-sm" onclick="insertVideoFromUrl()">Insert</button>
+            </div>
+        </div>
+        <div class="media-divider"><span>or upload a video file</span></div>
+        <div class="upload-zone" id="videoDropZone" onclick="pickVideoFile()">
+            <div class="upload-zone-text">Drag & drop a video here, or click to browse</div>
+        </div>
+        <div id="videoUploadStatus" style="font-size:11px;color:var(--text-muted);margin-top:6px"></div>
+        <div class="form-actions">
+            <button class="btn btn-secondary" onclick="closeVideoModal()">Cancel</button>
         </div>
     </div>
 </div>

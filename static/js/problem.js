@@ -67,6 +67,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         loadTabs();
         loadRevisions();
     });
+
+    initImageDrop();
+    initVideoDrop();
 });
 
 // ── Resizable split ───────────────────────────────────────
@@ -197,6 +200,35 @@ function renderBlocks(blocks) {
                 </div>
                 <div class="monaco-container" id="monaco-${i}"></div>
             </div>`;
+        } else if (block.type === 'image') {
+            return `<div class="block" data-index="${i}" draggable="false">
+                <div class="block-toolbar">
+                    <div class="block-toolbar-left"><span class="block-type-label">Image</span></div>
+                    <button class="block-delete" onclick="removeBlock(${i})" title="Delete block">&times;</button>
+                </div>
+                <div class="media-block-content">
+                    <img src="${escapeAttr(block.src)}" alt="${escapeAttr(block.caption || '')}">
+                </div>
+            </div>`;
+        } else if (block.type === 'video') {
+            let vc;
+            if (block.source_type === 'youtube' && block.video_id) {
+                vc = `<div class="video-embed"><iframe src="https://www.youtube.com/embed/${escapeAttr(block.video_id)}" frameborder="0" allow="accelerometer;autoplay;clipboard-write;encrypted-media;gyroscope;picture-in-picture" allowfullscreen></iframe></div>`;
+            } else if (block.source_type === 'upload') {
+                vc = `<video controls src="${escapeAttr(block.src)}"></video>`;
+            } else {
+                const thumb = block.thumbnail
+                    ? `<img src="${escapeAttr(block.thumbnail)}" alt="">`
+                    : `<div class="video-no-thumb"></div>`;
+                vc = `<a href="${escapeAttr(block.src)}" target="_blank" rel="noopener" class="video-link">${thumb}<div class="video-link-label">Open video ↗</div></a>`;
+            }
+            return `<div class="block" data-index="${i}" draggable="false">
+                <div class="block-toolbar">
+                    <div class="block-toolbar-left"><span class="block-type-label">Video</span></div>
+                    <button class="block-delete" onclick="removeBlock(${i})" title="Delete block">&times;</button>
+                </div>
+                <div class="media-block-content">${vc}</div>
+            </div>`;
         } else {
             return `<div class="block" data-index="${i}" draggable="false">
                 <div class="block-toolbar">
@@ -209,21 +241,30 @@ function renderBlocks(blocks) {
                     <button onclick="mdInsert(${i},'**','**')" title="Bold"><b>B</b></button>
                     <button onclick="mdInsert(${i},'*','*')" title="Italic"><i>I</i></button>
                     <button onclick="mdInsert(${i},'<u>','</u>')" title="Underline"><u>U</u></button>
-                    <button onclick="mdInsert(${i},'<mark>','</mark>')" title="Highlight">H</button>
                     <div class="sep"></div>
                     <button onclick="mdInsert(${i},'# ','')" title="H1">H1</button>
                     <button onclick="mdInsert(${i},'## ','')" title="H2">H2</button>
                     <button onclick="mdInsert(${i},'### ','')" title="H3">H3</button>
                     <div class="sep"></div>
-                    <select onchange="mdColor(${i},this.value);this.selectedIndex=0" title="Color">
-                        <option value="">Color</option>
-                        <option value="#ff4f64">Red</option>
-                        <option value="#00c9a7">Green</option>
-                        <option value="#4dabf7">Blue</option>
-                        <option value="#ffb800">Yellow</option>
-                        <option value="#cc5de8">Purple</option>
-                        <option value="#f0a030">Orange</option>
-                    </select>
+                    <span class="md-color-group" title="Text color">
+                        <span class="md-group-label">A</span>
+                        <span class="md-color-dot" style="background:#ff4f64" onclick="mdColor(${i},'#ff4f64')"></span>
+                        <span class="md-color-dot" style="background:#00c9a7" onclick="mdColor(${i},'#00c9a7')"></span>
+                        <span class="md-color-dot" style="background:#4dabf7" onclick="mdColor(${i},'#4dabf7')"></span>
+                        <span class="md-color-dot" style="background:#ffb800" onclick="mdColor(${i},'#ffb800')"></span>
+                        <span class="md-color-dot" style="background:#cc5de8" onclick="mdColor(${i},'#cc5de8')"></span>
+                        <span class="md-color-dot" style="background:#f0a030" onclick="mdColor(${i},'#f0a030')"></span>
+                    </span>
+                    <div class="sep"></div>
+                    <span class="md-color-group" title="Highlight">
+                        <span class="md-group-label">H</span>
+                        <span class="md-hl-dot" style="background:#ff4f6440;border-color:#ff4f64" onclick="mdHighlight(${i},'#ff4f6440')"></span>
+                        <span class="md-hl-dot" style="background:#00c9a740;border-color:#00c9a7" onclick="mdHighlight(${i},'#00c9a740')"></span>
+                        <span class="md-hl-dot" style="background:#4dabf740;border-color:#4dabf7" onclick="mdHighlight(${i},'#4dabf740')"></span>
+                        <span class="md-hl-dot" style="background:#ffb80040;border-color:#ffb800" onclick="mdHighlight(${i},'#ffb80040')"></span>
+                        <span class="md-hl-dot" style="background:#cc5de840;border-color:#cc5de8" onclick="mdHighlight(${i},'#cc5de840')"></span>
+                        <span class="md-hl-dot" style="background:#f0a03040;border-color:#f0a030" onclick="mdHighlight(${i},'#f0a03040')"></span>
+                    </span>
                     <div class="sep"></div>
                     <button onclick="mdInsert(${i},'$','$')" title="Inline math">&sum;</button>
                     <button onclick="mdInsert(${i},'\\n$$\\n','\\n$$\\n')" title="Block math">&sum;&sum;</button>
@@ -355,6 +396,8 @@ function changeLang(idx, lang) {
 function addBlock(type) {
     const tab = tabs.find(t => t.id === activeTabId);
     if (!tab) return;
+    if (type === 'image') { showImageModal(); return; }
+    if (type === 'video') { showVideoModal(); return; }
     const block = type === 'code'
         ? {type: 'code', language: defaultLanguage, content: ''}
         : {type: 'markdown', content: ''};
@@ -470,6 +513,11 @@ function mdColor(idx, color) {
     mdInsert(idx, `<span style="color:${color}">`, '</span>');
 }
 
+function mdHighlight(idx, color) {
+    if (!color) return;
+    mdInsert(idx, `<mark style="background:${color}">`, '</mark>');
+}
+
 function mdInsertDiagram(idx) {
     const ta = document.getElementById(`md-edit-${idx}`);
     if (!ta) return;
@@ -495,6 +543,11 @@ function collectTabContent() {
                 language: langSelect ? langSelect.value : (block.language || defaultLanguage),
                 content: editor ? editor.getValue() : block.content,
             };
+        } else if (block.type === 'image') {
+            return {type: 'image', src: block.src, caption: block.caption || ''};
+        } else if (block.type === 'video') {
+            return {type: 'video', src: block.src, source_type: block.source_type,
+                    video_id: block.video_id || null, thumbnail: block.thumbnail || null};
         } else {
             const edit = document.getElementById(`md-edit-${i}`);
             return {
@@ -624,4 +677,154 @@ async function deleteProblem() {
     if (!confirm('Delete this problem and all its tabs?')) return;
     await fetch(`/api/problems/${PROBLEM_ID}`, {method: 'DELETE'});
     window.location = '/';
+}
+
+function escapeAttr(s) {
+    return (s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// ── Image modal ──────────────────────────────────────────
+
+function showImageModal() {
+    document.getElementById('imageModal').classList.remove('hidden');
+    document.getElementById('imageUrlInput').value = '';
+    document.getElementById('imageUploadStatus').textContent = '';
+}
+
+function closeImageModal() {
+    document.getElementById('imageModal').classList.add('hidden');
+}
+
+function insertImageFromUrl() {
+    const url = document.getElementById('imageUrlInput').value.trim();
+    if (!url) return;
+    insertImageBlock(url);
+    closeImageModal();
+}
+
+function insertImageBlock(src) {
+    const tab = tabs.find(t => t.id === activeTabId);
+    if (!tab) return;
+    tab.content = collectTabContent();
+    tab.content.push({type: 'image', src, caption: ''});
+    renderBlocks(tab.content);
+    scheduleSave();
+}
+
+function initImageDrop() {
+    const zone = document.getElementById('imageDropZone');
+    if (!zone) return;
+    zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-active'); });
+    zone.addEventListener('dragleave', () => zone.classList.remove('drag-active'));
+    zone.addEventListener('drop', e => {
+        e.preventDefault();
+        zone.classList.remove('drag-active');
+        const file = e.dataTransfer.files[0];
+        if (file && file.type.startsWith('image/')) uploadImageFile(file);
+    });
+}
+
+function pickImageFile() {
+    const inp = document.createElement('input');
+    inp.type = 'file';
+    inp.accept = 'image/*';
+    inp.onchange = () => { if (inp.files[0]) uploadImageFile(inp.files[0]); };
+    inp.click();
+}
+
+async function uploadImageFile(file) {
+    const status = document.getElementById('imageUploadStatus');
+    status.textContent = 'Uploading...';
+    const fd = new FormData();
+    fd.append('file', file);
+    const resp = await fetch('/api/upload', {method: 'POST', body: fd});
+    const data = await resp.json();
+    if (data.url) {
+        insertImageBlock(data.url);
+        closeImageModal();
+    } else {
+        status.textContent = 'Upload failed';
+    }
+}
+
+// ── Video modal ──────────────────────────────────────────
+
+function showVideoModal() {
+    document.getElementById('videoModal').classList.remove('hidden');
+    document.getElementById('videoUrlInput').value = '';
+    document.getElementById('videoUploadStatus').textContent = '';
+}
+
+function closeVideoModal() {
+    document.getElementById('videoModal').classList.add('hidden');
+}
+
+async function insertVideoFromUrl() {
+    const url = document.getElementById('videoUrlInput').value.trim();
+    if (!url) return;
+    const status = document.getElementById('videoUploadStatus');
+    status.textContent = 'Fetching preview...';
+    try {
+        const resp = await fetch('/api/video-thumbnail', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({url}),
+        });
+        const data = await resp.json();
+        const block = {
+            type: 'video', src: url,
+            source_type: data.type || 'url',
+            video_id: data.video_id || null,
+            thumbnail: data.thumbnail || null,
+        };
+        insertVideoBlock(block);
+        closeVideoModal();
+    } catch {
+        status.textContent = 'Failed to fetch preview';
+    }
+}
+
+function insertVideoBlock(block) {
+    const tab = tabs.find(t => t.id === activeTabId);
+    if (!tab) return;
+    tab.content = collectTabContent();
+    tab.content.push(block);
+    renderBlocks(tab.content);
+    scheduleSave();
+}
+
+function initVideoDrop() {
+    const zone = document.getElementById('videoDropZone');
+    if (!zone) return;
+    zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-active'); });
+    zone.addEventListener('dragleave', () => zone.classList.remove('drag-active'));
+    zone.addEventListener('drop', e => {
+        e.preventDefault();
+        zone.classList.remove('drag-active');
+        const file = e.dataTransfer.files[0];
+        if (file && file.type.startsWith('video/')) uploadVideoFile(file);
+    });
+}
+
+function pickVideoFile() {
+    const inp = document.createElement('input');
+    inp.type = 'file';
+    inp.accept = 'video/*';
+    inp.onchange = () => { if (inp.files[0]) uploadVideoFile(inp.files[0]); };
+    inp.click();
+}
+
+async function uploadVideoFile(file) {
+    const status = document.getElementById('videoUploadStatus');
+    status.textContent = 'Uploading...';
+    const fd = new FormData();
+    fd.append('file', file);
+    const resp = await fetch('/api/upload', {method: 'POST', body: fd});
+    const data = await resp.json();
+    if (data.url) {
+        insertVideoBlock({type: 'video', src: data.url, source_type: 'upload', video_id: null, thumbnail: null});
+        closeVideoModal();
+    } else {
+        status.textContent = 'Upload failed';
+    }
 }

@@ -1,10 +1,13 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, send_from_directory
 import json
 import os
+import re
+import uuid
 from datetime import date, timedelta
 from models import Database
 
 app = Flask(__name__)
+VERSION = '1.2.0'
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE, 'config.json')
@@ -206,7 +209,9 @@ def api_update_settings():
 
 @app.route('/api/config', methods=['GET'])
 def api_get_config():
-    return jsonify(load_config())
+    cfg = load_config()
+    cfg['version'] = VERSION
+    return jsonify(cfg)
 
 
 @app.route('/api/config', methods=['PUT'])
@@ -218,6 +223,64 @@ def api_update_config():
     os.makedirs(config['data_dir'], exist_ok=True)
     db = Database(os.path.join(config['data_dir'], 'lms.db'))
     return jsonify({'ok': True})
+
+
+
+# ── API: File uploads ──────────────────────────────────────
+
+def _files_dir():
+    d = os.path.join(config['data_dir'], 'files')
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+@app.route('/api/upload', methods=['POST'])
+def api_upload():
+    f = request.files.get('file')
+    if not f or not f.filename:
+        return jsonify({'error': 'No file'}), 400
+    ext = os.path.splitext(f.filename)[1].lower()
+    name = f"{uuid.uuid4().hex}{ext}"
+    f.save(os.path.join(_files_dir(), name))
+    return jsonify({'url': f'/api/files/{name}', 'filename': name})
+
+
+@app.route('/api/files/<filename>')
+def api_serve_file(filename):
+    return send_from_directory(_files_dir(), filename)
+
+
+def _extract_youtube_id(url):
+    m = re.search(
+        r'(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/)([a-zA-Z0-9_-]{11})', url
+    )
+    return m.group(1) if m else None
+
+
+@app.route('/api/video-thumbnail', methods=['POST'])
+def api_video_thumbnail():
+    url = (request.json or {}).get('url', '')
+    vid = _extract_youtube_id(url)
+    if vid:
+        thumb_url = f'https://img.youtube.com/vi/{vid}/hqdefault.jpg'
+        try:
+            import requests as http
+            resp = http.get(thumb_url, timeout=5)
+            if resp.status_code == 200:
+                name = f'thumb_{vid}.jpg'
+                path = os.path.join(_files_dir(), name)
+                if not os.path.exists(path):
+                    with open(path, 'wb') as out:
+                        out.write(resp.content)
+                return jsonify({
+                    'thumbnail': f'/api/files/{name}',
+                    'type': 'youtube',
+                    'video_id': vid,
+                })
+        except Exception:
+            pass
+        return jsonify({'thumbnail': None, 'type': 'youtube', 'video_id': vid})
+    return jsonify({'thumbnail': None, 'type': 'url', 'video_id': None})
 
 
 if __name__ == '__main__':

@@ -2,14 +2,14 @@
 
 {% block header_actions %}
 <button class="btn-ghost" onclick="showSettings()" title="Settings">⚙</button>
-<button class="btn btn-primary" onclick="showNewProblemModal()">+ New Problem</button>
+<button class="btn btn-primary" style="margin-left:8px" onclick="showNewProblemModal()">+ New Problem</button>
 {% endblock %}
 
 {% block body %}
 <div class="landing">
     <!-- Sidebar -->
     <div class="sidebar">
-        <div class="section-title">⏰ Due for Review</div>
+        <div class="section-title">Due for Review</div>
         <div id="reminders"></div>
 
         <div class="search-box">
@@ -125,6 +125,7 @@
 <div class="modal-overlay hidden" id="settingsModal" onclick="if(event.target===this)closeSettings()">
     <div class="modal settings-modal">
         <h2>Settings</h2>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:-12px;margin-bottom:14px" id="settingsVersion"></div>
         <div class="setting-row">
             <div>
                 <div class="setting-label">Default Language</div>
@@ -148,9 +149,15 @@
             </select>
         </div>
         <div class="setting-row" style="border-bottom:none">
-            <div>
+            <div style="flex:1">
                 <div class="setting-label">Data Directory</div>
-                <div class="setting-desc" id="dataDir">./data</div>
+                <div class="setting-desc">Where problems and settings are stored</div>
+                <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
+                    <input type="text" class="form-input" id="dataDirInput" style="font-size:12px;padding:5px 8px;font-family:var(--font-mono)">
+                    <button class="btn btn-sm btn-secondary" onclick="resetDataDir()">Reset</button>
+                    <button class="btn btn-sm btn-primary" onclick="saveDataDir()">Save</button>
+                </div>
+                <div id="dataDirStatus" style="font-size:11px;margin-top:4px"></div>
             </div>
         </div>
         <div class="form-actions">

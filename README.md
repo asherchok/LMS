@@ -25,7 +25,14 @@ The launcher creates a virtual environment, installs dependencies (`flask`, `req
 
 ## Data
 
-All data lives in `./data/` (configurable via `config.json`). This directory is gitignored. Your problems, solutions, and revision history stay on your machine (or wherever you point `data_dir`).
+All data lives in `./data/` by default, configurable from Settings inside the app. This directory is gitignored. Your problems, solutions, and revision history stay on your machine.
+
+## Testing
+
+```bash
+pip install pytest
+pytest tests/ -v
+```
 
 ## License
 

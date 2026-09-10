@@ -336,7 +336,9 @@ async function showSettings() {
 
     const cfgResp = await fetch('/api/config');
     const cfg = await cfgResp.json();
-    document.getElementById('dataDir').textContent = cfg.data_dir || './data';
+    document.getElementById('dataDirInput').value = cfg.data_dir || './data';
+    document.getElementById('dataDirStatus').textContent = '';
+    document.getElementById('settingsVersion').textContent = 'v' + (cfg.version || '?');
 
     document.getElementById('settingsModal').classList.remove('hidden');
 }
@@ -351,6 +353,27 @@ async function saveSetting(key, value) {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({[key]: value}),
     });
+}
+
+async function saveDataDir() {
+    const dir = document.getElementById('dataDirInput').value.trim();
+    if (!dir) return;
+    const status = document.getElementById('dataDirStatus');
+    status.textContent = 'Saving...';
+    status.style.color = 'var(--text-muted)';
+    await fetch('/api/config', {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({data_dir: dir}),
+    });
+    status.textContent = 'Saved. Restart the app to use the new directory.';
+    status.style.color = 'var(--success)';
+}
+
+function resetDataDir() {
+    document.getElementById('dataDirInput').value = './data';
+    document.getElementById('dataDirStatus').textContent = 'Reset to default. Click Save to apply.';
+    document.getElementById('dataDirStatus').style.color = 'var(--text-muted)';
 }
 
 // ── New Problem Modal ─────────────────────────────────────
