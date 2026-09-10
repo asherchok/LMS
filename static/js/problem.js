@@ -12,6 +12,21 @@ function getMonacoTheme() {
     return document.documentElement.getAttribute('data-theme') === 'light' ? 'lms-light' : 'lms-dark';
 }
 
+function getMermaidTheme() {
+    return document.documentElement.getAttribute('data-theme') === 'light' ? 'default' : 'dark';
+}
+
+function rerenderMermaid() {
+    if (typeof mermaid === 'undefined') return;
+    mermaid.initialize({startOnLoad: false, theme: getMermaidTheme()});
+    document.querySelectorAll('.mermaid[data-mermaid-src]').forEach(el => {
+        el.removeAttribute('data-processed');
+        el.innerHTML = '';
+        el.textContent = el.getAttribute('data-mermaid-src');
+    });
+    try { mermaid.run(); } catch {}
+}
+
 function loadMonaco(cb) {
     const script = document.createElement('script');
     script.src = 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/loader.min.js';
@@ -35,9 +50,9 @@ function loadMonaco(cb) {
                 inherit: true,
                 rules: [],
                 colors: {
-                    'editor.background': '#ffffff',
-                    'editor.lineHighlightBackground': '#f5f0e8',
-                    'editorGutter.background': '#faf7f2',
+                    'editor.background': '#faf6f0',
+                    'editor.lineHighlightBackground': '#f0ebe2',
+                    'editorGutter.background': '#f5f0e8',
                 }
             });
             monaco.editor.setTheme(getMonacoTheme());
@@ -61,6 +76,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     window.toggleTheme = function() {
         origToggle();
         if (monacoReady) monaco.editor.setTheme(getMonacoTheme());
+        rerenderMermaid();
     };
 
     loadMonaco(() => {
@@ -471,7 +487,9 @@ function renderMarkdown(text) {
         if (el.className.includes('mermaid') || el.parentElement.previousElementSibling?.textContent?.includes('mermaid')) {
             const mermaidDiv = document.createElement('div');
             mermaidDiv.className = 'mermaid';
-            mermaidDiv.textContent = el.textContent;
+            const src = el.textContent;
+            mermaidDiv.textContent = src;
+            mermaidDiv.setAttribute('data-mermaid-src', src);
             el.parentElement.replaceWith(mermaidDiv);
         }
     });
