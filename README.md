@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="logo-circle.png" width="120" alt="LMS logo">
+</p>
+
 # LeetCode Management System
 
 ![Landing page](screenshot.png)
