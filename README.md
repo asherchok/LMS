@@ -15,12 +15,9 @@ A portable, local-first notebook for tracking and reviewing LeetCode problems. S
 
 ## Setup
 
-```
-./launch.sh        # macOS / Linux
-launch.bat         # Windows
-```
+Double-click `LMS.command` (macOS) or `launch.bat` (Windows) in Finder/Explorer. That's it.
 
-That's it. The launcher creates a virtual environment, installs dependencies (`flask`, `requests`), starts the server on port 5001, and opens your browser.
+The launcher creates a virtual environment, installs dependencies (`flask`, `requests`), starts the server on port 5001, and opens your browser. Linux users: `./launch.sh`.
 
 ## Data
 
