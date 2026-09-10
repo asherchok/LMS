@@ -961,26 +961,29 @@ a:hover { color: var(--accent-hover); }
 
 /* ── Code / Markdown blocks ────────────────────────────── */
 .block {
-    background: var(--bg-card);
-    border: 2px solid var(--ink);
-    border-radius: 255px 15px 225px 15px/15px 225px 15px 255px;
+    background: transparent;
+    border: 2px solid transparent;
+    border-radius: 6px;
     overflow: hidden;
+    transition: border-color .15s, opacity .15s, box-shadow .15s;
+    position: relative;
 }
-.block:hover { border-color: var(--ink-hover); }
-
-.block:nth-child(even) { border-radius: 15px 225px 15px 255px/255px 15px 225px 15px; }
-.block:nth-child(3n) { border-radius: 225px 15px 255px 15px/15px 255px 15px 225px; }
+.block:hover { border-color: var(--ink); border-style: dotted; }
+.block.dragging { opacity: .35; }
+.block.drag-over { border-color: var(--accent); border-style: dashed; box-shadow: 0 0 0 1px var(--accent); }
 
 .block-toolbar {
     display: flex;
     align-items: center;
     justify-content: space-between;
     padding: 4px 12px;
-    background: var(--bg-secondary);
+    background: transparent;
     border-bottom: 1px solid var(--border);
     font-size: 12px;
     gap: 8px;
+    cursor: grab;
 }
+.block-toolbar:active { cursor: grabbing; }
 
 .block-toolbar-left { display: flex; align-items: center; gap: 8px; }
 
@@ -1106,7 +1109,7 @@ a:hover { color: var(--accent-hover); }
 .markdown-edit {
     width: 100%;
     border: none;
-    background: var(--bg-card);
+    background: transparent;
     color: var(--text-primary);
     font-family: var(--font-mono);
     font-size: 13px;

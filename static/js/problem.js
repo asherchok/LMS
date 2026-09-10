@@ -171,6 +171,8 @@ async function renameTab() {
 
 // ── Blocks ────────────────────────────────────────────────
 
+let dragSrcIndex = null;
+
 function renderBlocks(blocks) {
     Object.values(monacoEditors).forEach(e => e.dispose());
     monacoEditors = {};
@@ -183,7 +185,7 @@ function renderBlocks(blocks) {
 
     container.innerHTML = blocks.map((block, i) => {
         if (block.type === 'code') {
-            return `<div class="block" data-index="${i}">
+            return `<div class="block" data-index="${i}" draggable="false">
                 <div class="block-toolbar">
                     <div class="block-toolbar-left">
                         <span class="block-type-label">Code</span>
@@ -191,17 +193,17 @@ function renderBlocks(blocks) {
                             ${langOptions(block.language || defaultLanguage)}
                         </select>
                     </div>
-                    <button class="block-delete" onclick="removeBlock(${i})" title="Delete block">×</button>
+                    <button class="block-delete" onclick="removeBlock(${i})" title="Delete block">&times;</button>
                 </div>
                 <div class="monaco-container" id="monaco-${i}"></div>
             </div>`;
         } else {
-            return `<div class="block" data-index="${i}">
+            return `<div class="block" data-index="${i}" draggable="false">
                 <div class="block-toolbar">
                     <div class="block-toolbar-left">
                         <span class="block-type-label">Commentary</span>
                     </div>
-                    <button class="block-delete" onclick="removeBlock(${i})" title="Delete block">×</button>
+                    <button class="block-delete" onclick="removeBlock(${i})" title="Delete block">&times;</button>
                 </div>
                 <div class="md-toolbar" id="md-toolbar-${i}" style="display:none" onmousedown="event.preventDefault()">
                     <button onclick="mdInsert(${i},'**','**')" title="Bold"><b>B</b></button>
@@ -223,9 +225,9 @@ function renderBlocks(blocks) {
                         <option value="#f0a030">Orange</option>
                     </select>
                     <div class="sep"></div>
-                    <button onclick="mdInsert(${i},'$','$')" title="Inline math">∑</button>
-                    <button onclick="mdInsert(${i},'\\n$$\\n','\\n$$\\n')" title="Block math">∑∑</button>
-                    <button onclick="mdInsertDiagram(${i})" title="Diagram">◈</button>
+                    <button onclick="mdInsert(${i},'$','$')" title="Inline math">&sum;</button>
+                    <button onclick="mdInsert(${i},'\\n$$\\n','\\n$$\\n')" title="Block math">&sum;&sum;</button>
+                    <button onclick="mdInsertDiagram(${i})" title="Diagram">&#x25C8;</button>
                 </div>
                 <div class="markdown-preview" id="md-preview-${i}"
                      onclick="editMarkdown(${i})">${renderMarkdown(block.content || '')}</div>
@@ -236,14 +238,30 @@ function renderBlocks(blocks) {
         }
     }).join('');
 
+    container.querySelectorAll('.block').forEach(el => {
+        el.addEventListener('dragstart', onBlockDragStart);
+        el.addEventListener('dragend', onBlockDragEnd);
+        el.addEventListener('dragover', onBlockDragOver);
+        el.addEventListener('dragenter', onBlockDragEnter);
+        el.addEventListener('dragleave', onBlockDragLeave);
+        el.addEventListener('drop', onBlockDrop);
+        // Only allow drag from toolbar, not from editor/textarea content
+        el.setAttribute('draggable', 'false');
+        const toolbar = el.querySelector('.block-toolbar');
+        if (toolbar) {
+            toolbar.addEventListener('mousedown', () => el.setAttribute('draggable', 'true'));
+            toolbar.addEventListener('mouseup', () => el.setAttribute('draggable', 'false'));
+        }
+    });
+
     blocks.forEach((block, i) => {
         if (block.type === 'code' && monacoReady) {
-            const container = document.getElementById(`monaco-${i}`);
-            if (!container) return;
-            const editor = monaco.editor.create(container, {
+            const cont = document.getElementById(`monaco-${i}`);
+            if (!cont) return;
+            const editor = monaco.editor.create(cont, {
                 value: block.content || '',
                 language: block.language || defaultLanguage,
-                theme: 'lms-dark',
+                theme: getMonacoTheme(),
                 minimap: {enabled: false},
                 scrollBeyondLastLine: false,
                 fontSize: 13,
@@ -258,15 +276,63 @@ function renderBlocks(blocks) {
             editor.onDidChangeModelContent(() => scheduleSave());
             editor.onDidContentSizeChange(() => {
                 const h = Math.min(600, Math.max(80, editor.getContentHeight()));
-                container.style.height = h + 'px';
+                cont.style.height = h + 'px';
                 editor.layout();
             });
             const initH = Math.min(600, Math.max(80, editor.getContentHeight()));
-            container.style.height = initH + 'px';
+            cont.style.height = initH + 'px';
             editor.layout();
             monacoEditors[i] = editor;
         }
     });
+}
+
+// ── Block drag-and-drop ──────────────────────────────────
+
+function onBlockDragStart(e) {
+    dragSrcIndex = parseInt(this.dataset.index);
+    this.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', dragSrcIndex);
+}
+
+function onBlockDragEnd() {
+    this.classList.remove('dragging');
+    this.setAttribute('draggable', 'false');
+    document.querySelectorAll('.block').forEach(b => b.classList.remove('drag-over'));
+    dragSrcIndex = null;
+}
+
+function onBlockDragOver(e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+}
+
+function onBlockDragEnter(e) {
+    e.preventDefault();
+    const idx = parseInt(this.dataset.index);
+    if (idx !== dragSrcIndex) this.classList.add('drag-over');
+}
+
+function onBlockDragLeave() {
+    this.classList.remove('drag-over');
+}
+
+function onBlockDrop(e) {
+    e.preventDefault();
+    this.classList.remove('drag-over');
+    const fromIdx = dragSrcIndex;
+    const toIdx = parseInt(this.dataset.index);
+    if (fromIdx === null || fromIdx === toIdx) return;
+
+    const tab = tabs.find(t => t.id === activeTabId);
+    if (!tab) return;
+
+    tab.content = collectTabContent();
+    const [moved] = tab.content.splice(fromIdx, 1);
+    tab.content.splice(toIdx, 0, moved);
+    renderBlocks(tab.content);
+    scheduleSave();
 }
 
 function langOptions(selected) {
