@@ -511,6 +511,24 @@ function saveCurrentTab() {
     if (tab) tab.content = collectTabContent();
 }
 
+let saveStatusTimeout = null;
+
+function showSaveStatus(state) {
+    const el = document.getElementById('saveStatus');
+    if (!el) return;
+    clearTimeout(saveStatusTimeout);
+    el.className = 'save-status';
+    void el.offsetHeight;
+    if (state === 'saving') {
+        el.textContent = 'Saving...';
+        el.className = 'save-status visible saving';
+    } else if (state === 'saved') {
+        el.textContent = 'Saved';
+        el.className = 'save-status visible saved';
+        saveStatusTimeout = setTimeout(() => { el.className = 'save-status'; }, 2000);
+    }
+}
+
 function scheduleSave() {
     clearTimeout(saveTimeout);
     saveTimeout = setTimeout(doSave, 1000);
@@ -518,6 +536,7 @@ function scheduleSave() {
 
 async function doSave() {
     if (!activeTabId) return;
+    showSaveStatus('saving');
     const content = collectTabContent();
     const tab = tabs.find(t => t.id === activeTabId);
     if (tab) tab.content = content;
@@ -526,6 +545,7 @@ async function doSave() {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({content}),
     });
+    showSaveStatus('saved');
 }
 
 // ── Revisions ─────────────────────────────────────────────
