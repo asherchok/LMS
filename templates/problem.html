@@ -1,0 +1,161 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ problem.title }} - LMS{% endblock %}
+
+{% block header_actions %}
+<a href="/" class="btn btn-secondary">← Back</a>
+{% endblock %}
+
+{% block head %}
+<script>const PROBLEM_ID = {{ problem.id }};</script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
+{% endblock %}
+
+{% block body %}
+<div class="problem-page" id="problemPage">
+    <!-- Left panel: problem description -->
+    <div class="problem-left" id="problemLeft">
+        <div class="prob-header">
+            {% if problem.leetcode_number %}
+            <span class="prob-number">#{{ problem.leetcode_number }}</span>
+            {% endif %}
+            <span class="prob-title" id="probTitle">{{ problem.title }}</span>
+            <button class="prob-edit-btn" onclick="toggleEditProblem()" title="Edit problem">✎</button>
+        </div>
+
+        <div class="prob-meta">
+            <span class="badge badge-{{ problem.difficulty }}">{{ problem.difficulty }}</span>
+            {% if problem.elo_rating %}
+            <span class="prob-elo">Elo: {{ problem.elo_rating }}</span>
+            {% endif %}
+        </div>
+
+        <!-- Revision info -->
+        <div class="revision-info">
+            <div class="revision-dots" id="revisionDots"></div>
+            <span class="revision-count" id="revisionCount">{{ problem.revision_count }}</span>
+            <span style="font-size:12px;color:var(--text-muted)">revision{{ 's' if problem.revision_count != 1 }}</span>
+        </div>
+
+        <div class="prob-tags" id="probTags">
+            {% for tag in problem.tags %}
+            <span class="prob-tag">{{ tag }}</span>
+            {% endfor %}
+        </div>
+
+        {% if problem.source_url %}
+        <a href="{{ problem.source_url }}" target="_blank" rel="noopener" class="prob-source-btn">
+            ↗ Go to Source
+        </a>
+        {% endif %}
+
+        <div class="prob-description" id="probDescription">{{ problem.description | safe }}</div>
+
+        <!-- Edit form (hidden) -->
+        <div class="hidden" id="editForm" style="margin-top:20px">
+            <div class="form-group">
+                <label class="form-label">Title</label>
+                <input type="text" class="form-input" id="editTitle" value="{{ problem.title }}">
+            </div>
+            <div class="form-group">
+                <label class="form-label">LeetCode #</label>
+                <input type="number" class="form-input" id="editLcNum" value="{{ problem.leetcode_number or '' }}">
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label class="form-label">Difficulty</label>
+                    <select class="form-select" id="editDifficulty">
+                        <option value="easy" {{ 'selected' if problem.difficulty == 'easy' }}>Easy</option>
+                        <option value="medium" {{ 'selected' if problem.difficulty == 'medium' }}>Medium</option>
+                        <option value="hard" {{ 'selected' if problem.difficulty == 'hard' }}>Hard</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Elo Rating</label>
+                    <input type="number" class="form-input" id="editElo" value="{{ problem.elo_rating or '' }}">
+                </div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Source URL</label>
+                <input type="text" class="form-input" id="editSourceUrl" value="{{ problem.source_url or '' }}">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Tags (comma-separated)</label>
+                <input type="text" class="form-input" id="editTags" value="{{ problem.tags | join(', ') }}">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Description</label>
+                <textarea class="form-textarea" id="editDescription" rows="8">{{ problem.description }}</textarea>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:12px">
+                <button class="btn btn-primary btn-sm" onclick="saveProblemEdit()">Save</button>
+                <button class="btn btn-secondary btn-sm" onclick="toggleEditProblem()">Cancel</button>
+                <button class="btn btn-danger btn-sm" style="margin-left:auto" onclick="deleteProblem()">Delete</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Resize handle -->
+    <div class="resize-handle" id="resizeHandle"></div>
+
+    <!-- Right panel: editor -->
+    <div class="problem-right">
+        <!-- Vertical tabs -->
+        <div class="vtabs" id="vtabs"></div>
+
+        <!-- Editor content -->
+        <div class="editor-area" id="editorArea">
+            <div class="editor-toolbar">
+                <div class="editor-toolbar-left">
+                    <input type="text" class="tab-title-input" id="tabTitleInput"
+                           onchange="renameTab()">
+                </div>
+                <div class="editor-toolbar-right">
+                    <button class="btn btn-success btn-sm" onclick="showRevisedPopup()">✓ Revised</button>
+                    <button class="btn btn-secondary btn-sm" onclick="deleteTab()">Delete Tab</button>
+                </div>
+            </div>
+            <div id="blocksContainer"></div>
+            <div class="add-block-row">
+                <button class="btn btn-secondary btn-sm" onclick="addBlock('code')">+ Code</button>
+                <button class="btn btn-secondary btn-sm" onclick="addBlock('markdown')">+ Commentary</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Revised popup -->
+<div class="modal-overlay hidden" id="revisedModal" onclick="if(event.target===this)closeRevisedPopup()">
+    <div class="revised-popup">
+        <h3>Mark as Revised for Today?</h3>
+        <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px">
+            Remind me to revisit this problem in...
+        </p>
+        <div class="remind-options" id="remindOptions">
+            <button class="remind-option" data-days="3" onclick="selectRemind(this)">3 days</button>
+            <button class="remind-option" data-days="5" onclick="selectRemind(this)">5 days</button>
+            <button class="remind-option selected" data-days="7" onclick="selectRemind(this)">7 days</button>
+            <button class="remind-option" data-days="14" onclick="selectRemind(this)">14 days</button>
+            <button class="remind-option" data-days="30" onclick="selectRemind(this)">30 days</button>
+            <div style="display:flex;align-items:center;gap:6px">
+                <input type="number" class="custom-days-input" id="customDays" placeholder="N"
+                       onfocus="clearRemindSelection()" min="1">
+                <span style="font-size:13px;color:var(--text-secondary)">days</span>
+            </div>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+            <button class="btn btn-secondary" onclick="closeRevisedPopup()">No</button>
+            <button class="btn btn-success" onclick="confirmRevised()">Yes, Mark Revised</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.0/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:false, theme:'dark'});</script>
+<script src="/static/js/problem.js"></script>
+{% endblock %}

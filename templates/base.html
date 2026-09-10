@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script>
+    (function(){
+        var t = localStorage.getItem('lms-theme');
+        if (t === 'light' || location.search.indexOf('theme=light') > -1)
+            document.documentElement.setAttribute('data-theme','light');
+    })();
+    </script>
+    <title>{% block title %}LeetCode Management System{% endblock %}</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <header class="header">
+        <a href="/" style="text-decoration:none;color:inherit">
+            <h1>LeetCode Management System</h1>
+        </a>
+        <div class="header-actions">
+            <button class="btn-ghost" onclick="toggleTheme()" id="themeToggle" title="Toggle theme"></button>
+            {% block header_actions %}{% endblock %}
+        </div>
+    </header>
+    {% block body %}{% endblock %}
+    {% block scripts %}{% endblock %}
+    <script>
+    function toggleTheme() {
+        var isLight = document.documentElement.getAttribute('data-theme') === 'light';
+        if (isLight) {
+            document.documentElement.removeAttribute('data-theme');
+            localStorage.setItem('lms-theme', 'dark');
+        } else {
+            document.documentElement.setAttribute('data-theme', 'light');
+            localStorage.setItem('lms-theme', 'light');
+        }
+        updateThemeIcon();
+    }
+    function updateThemeIcon() {
+        var btn = document.getElementById('themeToggle');
+        var isLight = document.documentElement.getAttribute('data-theme') === 'light';
+        btn.textContent = isLight ? '☾' : '☀';
+    }
+    updateThemeIcon();
+    </script>
+</body>
+</html>

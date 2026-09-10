@@ -1,0 +1,17 @@
+# Data (SQLite DB lives here — keep on machine, not in repo)
+data/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Config overrides
+config.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude
+.claude/

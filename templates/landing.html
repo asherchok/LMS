@@ -1,0 +1,165 @@
+{% extends 'base.html' %}
+
+{% block header_actions %}
+<button class="btn-ghost" onclick="showSettings()" title="Settings">⚙</button>
+<button class="btn btn-primary" onclick="showNewProblemModal()">+ New Problem</button>
+{% endblock %}
+
+{% block body %}
+<div class="landing">
+    <!-- Sidebar -->
+    <div class="sidebar">
+        <div class="section-title">⏰ Due for Review</div>
+        <div id="reminders"></div>
+
+        <div class="search-box">
+            <input type="text" class="search-input" id="searchInput"
+                   placeholder="Search problems..." oninput="filterProblems()">
+        </div>
+
+        <div id="activeFilters"></div>
+
+        <div class="section-title" style="margin-top:4px">All Problems</div>
+        <div class="problem-list" id="problemList"></div>
+    </div>
+
+    <!-- Main content -->
+    <div class="main-content">
+        <!-- Calendar -->
+        <div>
+            <div class="calendar-header">
+                <button class="calendar-nav" onclick="changeMonth(-1)">‹</button>
+                <span class="calendar-month" id="calendarMonth"></span>
+                <button class="calendar-nav" onclick="changeMonth(1)">›</button>
+            </div>
+            <div class="calendar-grid" id="calendarGrid"></div>
+        </div>
+
+        <!-- Stats row -->
+        <div class="stats-row" id="statsRow"></div>
+
+        <!-- Topics -->
+        <div class="topics-section">
+            <div class="section-title">Topics</div>
+            <div class="topics-wrap" id="topicBubbles"></div>
+        </div>
+
+        <!-- Contribution graph -->
+        <div class="contrib-section">
+            <div class="contrib-title">Activity</div>
+            <div class="contrib-months" id="contribMonths"></div>
+            <div class="contrib-graph-wrap">
+                <div class="contrib-graph" id="contribGraph"></div>
+            </div>
+            <div class="contrib-legend">
+                Less
+                <div class="contrib-cell"></div>
+                <div class="contrib-cell l1"></div>
+                <div class="contrib-cell l2"></div>
+                <div class="contrib-cell l3"></div>
+                <div class="contrib-cell l4"></div>
+                More
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Tooltip -->
+<div class="tooltip hidden" id="tooltip"></div>
+
+<!-- New Problem Modal -->
+<div class="modal-overlay hidden" id="newProblemModal" onclick="if(event.target===this)closeModal()">
+    <div class="modal">
+        <h2>New Problem</h2>
+        <div class="fetch-row">
+            <div class="form-group">
+                <label class="form-label">LeetCode # (optional)</label>
+                <input type="number" class="form-input" id="npLeetcodeNum" placeholder="e.g. 1">
+            </div>
+            <button class="btn btn-secondary" onclick="fetchLeetCode()" style="margin-bottom:14px">Fetch</button>
+        </div>
+        <div class="form-group">
+            <label class="form-label">Title *</label>
+            <input type="text" class="form-input" id="npTitle" placeholder="Two Sum">
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label class="form-label">Difficulty</label>
+                <select class="form-select" id="npDifficulty">
+                    <option value="easy">Easy</option>
+                    <option value="medium" selected>Medium</option>
+                    <option value="hard">Hard</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Elo Rating</label>
+                <input type="number" class="form-input" id="npElo" placeholder="Optional">
+            </div>
+        </div>
+        <div class="form-group">
+            <label class="form-label">Source URL</label>
+            <input type="text" class="form-input" id="npSourceUrl" placeholder="https://leetcode.com/problems/...">
+        </div>
+        <div class="form-group">
+            <label class="form-label">Tags (press Enter to add)</label>
+            <div class="tag-input-wrap" id="npTagsWrap" onclick="this.querySelector('input').focus()">
+                <input type="text" class="tag-input" id="npTagInput"
+                       placeholder="e.g. Array, DP..."
+                       onkeydown="handleTagKey(event)">
+            </div>
+        </div>
+        <div class="form-group">
+            <label class="form-label">Description</label>
+            <textarea class="form-textarea" id="npDescription" rows="5"
+                      placeholder="Problem description (HTML or plain text)"></textarea>
+        </div>
+        <div id="fetchStatus" style="font-size:12px;color:var(--text-muted);margin-bottom:8px"></div>
+        <div class="form-actions">
+            <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="createProblem()">Create</button>
+        </div>
+    </div>
+</div>
+
+<!-- Settings Modal -->
+<div class="modal-overlay hidden" id="settingsModal" onclick="if(event.target===this)closeSettings()">
+    <div class="modal settings-modal">
+        <h2>Settings</h2>
+        <div class="setting-row">
+            <div>
+                <div class="setting-label">Default Language</div>
+                <div class="setting-desc">Language for new code blocks</div>
+            </div>
+            <select class="form-select" id="settingDefaultLang" style="width:140px" onchange="saveSetting('default_language', this.value)">
+                <option value="python">Python</option>
+                <option value="cpp">C++</option>
+                <option value="java">Java</option>
+                <option value="javascript">JavaScript</option>
+                <option value="typescript">TypeScript</option>
+                <option value="go">Go</option>
+                <option value="rust">Rust</option>
+                <option value="csharp">C#</option>
+                <option value="c">C</option>
+                <option value="swift">Swift</option>
+                <option value="kotlin">Kotlin</option>
+                <option value="ruby">Ruby</option>
+                <option value="scala">Scala</option>
+                <option value="sql">SQL</option>
+            </select>
+        </div>
+        <div class="setting-row" style="border-bottom:none">
+            <div>
+                <div class="setting-label">Data Directory</div>
+                <div class="setting-desc" id="dataDir">./data</div>
+            </div>
+        </div>
+        <div class="form-actions">
+            <button class="btn btn-secondary" onclick="closeSettings()">Close</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/landing.js"></script>
+{% endblock %}
