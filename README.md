@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo-circle.png" width="120" alt="LMS logo">
+  <img src="assets/logo-circle.png" width="120" alt="LMS logo" style="border-radius:50%">
 </p>
 
 # LeetCode Management System

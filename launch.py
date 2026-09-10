@@ -53,8 +53,33 @@ def setup():
     )
 
 
+def set_macos_icon():
+    """Set the LMS icon on .command file if on macOS and not already set."""
+    if sys.platform != 'darwin':
+        return
+    cmd_file = os.path.join(DIR, 'LMS.command')
+    icns = os.path.join(DIR, 'assets', 'logo.icns')
+    if not os.path.exists(cmd_file) or not os.path.exists(icns):
+        return
+    # Check if icon resource fork already exists
+    icon_rsrc = cmd_file + '/..namedfork/rsrc'
+    if os.path.exists(icon_rsrc) and os.path.getsize(icon_rsrc) > 0:
+        return
+    try:
+        script = (
+            'use framework "AppKit"\n'
+            f'set iconImage to current application\'s NSImage\'s alloc()\'s initWithContentsOfFile:"{icns}"\n'
+            f'current application\'s NSWorkspace\'s sharedWorkspace()\'s setIcon:iconImage forFile:"{cmd_file}" options:0'
+        )
+        subprocess.run(['osascript', '-l', 'AppleScript', '-e', script],
+                       capture_output=True, timeout=5)
+    except Exception:
+        pass
+
+
 def main():
     setup()
+    set_macos_icon()
     url = f'http://localhost:{PORT}'
     print(f'[LMS] Starting server at {url}')
 
