@@ -70,7 +70,49 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     initImageDrop();
     initVideoDrop();
+    lazyEnrichDescription();
 });
+
+// ── Lazy description sync ─────────────────────────────────
+// Imported problems have no description until opened. Fetch it from LeetCode
+// (public) on first view so the page becomes a proper problem environment.
+
+async function lazyEnrichDescription() {
+    const el = document.getElementById('probDescription');
+    if (!el || !PROBLEM_SLUG) return;
+    if (el.textContent.trim()) return;   // already has a description
+    el.innerHTML = '<span style="color:var(--text-muted);font-size:13px">Loading problem from LeetCode…</span>';
+    try {
+        const resp = await fetch(`/api/problems/${PROBLEM_ID}/enrich`, {method: 'POST'});
+        const data = await resp.json();
+        if (data.enriched && data.problem) {
+            el.innerHTML = data.problem.description || '';
+            if (typeof renderMathInElement !== 'undefined') {
+                try {
+                    renderMathInElement(el, {
+                        delimiters: [
+                            {left: '$$', right: '$$', display: true},
+                            {left: '$', right: '$', display: false},
+                        ],
+                        throwOnError: false,
+                    });
+                } catch {}
+            }
+            renderProblemTags(data.problem.tags || []);
+        } else {
+            el.innerHTML = '';
+        }
+    } catch {
+        el.innerHTML = '';
+    }
+}
+
+function renderProblemTags(tags) {
+    const wrap = document.getElementById('probTags');
+    if (!wrap || !tags.length) return;
+    if (wrap.querySelector('.prob-tag')) return;   // don't duplicate
+    wrap.innerHTML = tags.map(t => `<span class="prob-tag">${t}</span>`).join('');
+}
 
 // ── Resizable split ───────────────────────────────────────
 

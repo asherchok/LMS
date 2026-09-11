@@ -558,6 +558,37 @@ class TestLeetCodeAccount:
         assert not app_module.db.get_setting('leetcode_session')
 
 
+class TestEnrichProblem:
+    def test_enrich_fills_empty_description(self, app_client):
+        client, app_module = app_client
+        pid = app_module.db.create_problem(
+            {'title': 'Two Sum', 'title_slug': 'two-sum', 'leetcode_number': 1,
+             'imported': True})
+        with patch('requests.post', side_effect=make_lc_post([])):
+            resp = client.post(f'/api/problems/{pid}/enrich')
+        data = resp.get_json()
+        assert data['enriched'] is True
+        assert 'two sum' in data['problem']['description']
+        assert 'Array' in data['problem']['tags']
+
+    def test_enrich_never_overwrites_existing(self, app_client):
+        client, app_module = app_client
+        pid = app_module.db.create_problem(
+            {'title': 'Two Sum', 'title_slug': 'two-sum',
+             'description': 'MY OWN NOTES', 'leetcode_number': 1})
+        with patch('requests.post', side_effect=make_lc_post([])):
+            resp = client.post(f'/api/problems/{pid}/enrich')
+        data = resp.get_json()
+        assert data['enriched'] is False
+        assert data['problem']['description'] == 'MY OWN NOTES'
+
+    def test_enrich_noop_without_slug(self, app_client):
+        client, app_module = app_client
+        pid = app_module.db.create_problem({'title': 'Manual', 'leetcode_number': None})
+        resp = client.post(f'/api/problems/{pid}/enrich')
+        assert resp.get_json()['enriched'] is False
+
+
 class TestFileUpload:
     def test_upload_file(self, app_client):
         client, _ = app_client

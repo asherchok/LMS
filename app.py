@@ -566,6 +566,37 @@ def api_leetcode_submissions(slug):
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/problems/<int:pid>/enrich', methods=['POST'])
+def api_enrich_problem(pid):
+    """Lazily fill an imported problem's description/tags from LeetCode.
+
+    Public query (no login needed). Only fills fields that are still empty so
+    it never overwrites anything the user has written.
+    """
+    p = db.get_problem(pid)
+    if not p:
+        return jsonify({'error': 'Not found'}), 404
+    slug = p.get('title_slug')
+    if not slug:
+        return jsonify({'enriched': False, 'reason': 'no_slug', 'problem': p})
+    if (p.get('description') or '').strip():
+        return jsonify({'enriched': False, 'reason': 'already_filled', 'problem': p})
+    try:
+        q = (_lc_post(_Q_QUESTION, {'slug': slug}).get('data') or {}).get('question')
+        if not q:
+            return jsonify({'enriched': False, 'reason': 'not_found', 'problem': p})
+        updates = {'description': q.get('content') or ''}
+        tags = [t['name'] for t in q.get('topicTags', [])]
+        if tags and not p.get('tags'):
+            updates['tags'] = tags
+        if q.get('difficulty'):
+            updates['difficulty'] = q['difficulty'].lower()
+        db.update_problem(pid, updates)
+        return jsonify({'enriched': True, 'problem': db.get_problem(pid)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/leetcode/submission/<int:sid>')
 def api_leetcode_submission_code(sid):
     """The actual submitted code for one submission (on-demand)."""
