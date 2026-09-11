@@ -7,7 +7,8 @@
 {% endblock %}
 
 {% block head %}
-<script>const PROBLEM_ID = {{ problem.id }};</script>
+<script>const PROBLEM_ID = {{ problem.id }};
+const PROBLEM_SLUG = {{ (problem.title_slug or '') | tojson }};</script>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
 {% endblock %}
 
@@ -122,7 +123,10 @@
                 <button class="btn btn-secondary btn-sm" onclick="addBlock('markdown')">+ Commentary</button>
                 <button class="btn btn-secondary btn-sm" onclick="addBlock('image')">+ Image</button>
                 <button class="btn btn-secondary btn-sm" onclick="addBlock('video')">+ Video</button>
+                <button class="btn btn-secondary btn-sm" id="importLcBtn" onclick="importLeetCodeCode()"
+                        title="Import your accepted submission from LeetCode">⭳ Import my LeetCode code</button>
             </div>
+            <div id="lcImportStatus" style="font-size:11px;color:var(--text-muted);margin-top:4px"></div>
         </div>
     </div>
 </div>

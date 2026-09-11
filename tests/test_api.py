@@ -425,6 +425,139 @@ class TestLeetCodeSync:
         assert resp.status_code == 400
 
 
+# ── LeetCode account / auth (v2) ────────────────────────────
+
+def problems_all_payload(status_map):
+    """Build a /api/problems/all/ style payload. status_map: {slug: 'ac'|None}."""
+    meta = {
+        'two-sum': (1, 'Two Sum', 1),
+        'add-two-numbers': (2, 'Add Two Numbers', 2),
+        'median-two-sorted': (4, 'Median of Two Sorted Arrays', 3),
+    }
+    pairs = []
+    for slug, (num, title, level) in meta.items():
+        pairs.append({
+            'stat': {'question__title': title, 'question__title_slug': slug,
+                     'frontend_question_id': num},
+            'difficulty': {'level': level},
+            'status': status_map.get(slug),
+            'paid_only': False,
+        })
+    return {'stat_status_pairs': pairs}
+
+
+def signed_in_post(username='votrubac'):
+    def fake_post(url, json=None, **kwargs):
+        m = MagicMock()
+        m.json.return_value = {'data': {'userStatus': {'username': username, 'isSignedIn': True}}}
+        return m
+    return fake_post
+
+
+class TestLeetCodeAccount:
+    def _login(self, client):
+        with patch('requests.post', side_effect=signed_in_post()):
+            return client.post('/api/leetcode/login',
+                               json={'session': 'sess-token', 'csrf': 'csrf-token'})
+
+    def test_login_success(self, app_client):
+        client, app_module = app_client
+        resp = self._login(client)
+        assert resp.status_code == 200
+        assert resp.get_json()['username'] == 'votrubac'
+        # Token persisted server-side...
+        assert app_module.db.get_setting('leetcode_session') == 'sess-token'
+
+    def test_login_rejects_invalid_session(self, app_client):
+        client, _ = app_client
+
+        def not_signed_in(url, json=None, **kwargs):
+            m = MagicMock()
+            m.json.return_value = {'data': {'userStatus': {'username': '', 'isSignedIn': False}}}
+            return m
+        with patch('requests.post', side_effect=not_signed_in):
+            resp = client.post('/api/leetcode/login', json={'session': 'bad'})
+        assert resp.status_code == 401
+
+    def test_token_never_exposed_via_settings(self, app_client):
+        client, _ = app_client
+        self._login(client)
+        settings = client.get('/api/settings').get_json()
+        assert 'leetcode_session' not in settings
+        assert 'leetcode_csrf' not in settings
+        # But auth state is reported without the token.
+        auth = client.get('/api/leetcode/auth').get_json()
+        assert auth['logged_in'] is True
+        assert auth['username'] == 'votrubac'
+
+    def test_settings_put_cannot_set_token(self, app_client):
+        client, app_module = app_client
+        client.put('/api/settings', json={'leetcode_session': 'injected'})
+        assert app_module.db.get_setting('leetcode_session') in (None, '')
+
+    def test_backfill_requires_login(self, app_client):
+        client, _ = app_client
+        resp = client.post('/api/leetcode/backfill')
+        assert resp.status_code == 401
+
+    def test_backfill_imports_only_solved(self, app_client):
+        client, app_module = app_client
+        self._login(client)
+        payload = problems_all_payload(
+            {'two-sum': 'ac', 'add-two-numbers': 'ac', 'median-two-sorted': None})
+        mock_get = MagicMock()
+        mock_get.json.return_value = payload
+        with patch('requests.get', return_value=mock_get):
+            resp = client.post('/api/leetcode/backfill')
+        data = resp.get_json()
+        assert data['created'] == 2                 # only the two AC problems
+        assert data['solved_total'] == 2
+        assert app_module.db.get_problem_by_slug('two-sum') is not None
+        assert app_module.db.get_problem_by_slug('median-two-sorted') is None  # unsolved skipped
+
+    def test_backfill_dedups_and_backfills_slug(self, app_client):
+        client, app_module = app_client
+        self._login(client)
+        # Pre-existing problem tracked by number only (no slug), with notes.
+        pid = app_module.db.create_problem({'title': 'Two Sum', 'leetcode_number': 1})
+        tabs = app_module.db.get_tabs(pid)
+        app_module.db.update_tab(tabs[0]['id'], {'content': [{'note': 'mine'}]})
+
+        payload = problems_all_payload({'two-sum': 'ac'})
+        mock_get = MagicMock()
+        mock_get.json.return_value = payload
+        with patch('requests.get', return_value=mock_get):
+            resp = client.post('/api/leetcode/backfill')
+        data = resp.get_json()
+        assert data['created'] == 0 and data['skipped'] == 1     # no duplicate
+        assert app_module.db.get_problem_by_slug('two-sum')['id'] == pid  # slug backfilled
+        assert app_module.db.get_tabs(pid)[0]['content'] == [{'note': 'mine'}]  # notes kept
+
+    def test_imported_problems_stay_off_calendar(self, app_client):
+        client, app_module = app_client
+        self._login(client)
+        payload = problems_all_payload({'two-sum': 'ac', 'add-two-numbers': 'ac'})
+        mock_get = MagicMock()
+        mock_get.json.return_value = payload
+        with patch('requests.get', return_value=mock_get):
+            client.post('/api/leetcode/backfill')
+        # They exist and count toward stats...
+        assert len(app_module.db.list_problems()) == 2
+        # ...but do NOT appear on today's calendar or spike the activity graph.
+        today = date.today()
+        cal = client.get(f'/api/calendar/{today.year}/{today.month}').get_json()
+        assert all(len(v) == 0 for v in cal.values())
+        contrib = client.get('/api/contributions').get_json()
+        assert contrib.get(today.isoformat(), 0) == 0
+
+    def test_logout_clears_session(self, app_client):
+        client, app_module = app_client
+        self._login(client)
+        client.post('/api/leetcode/logout')
+        assert client.get('/api/leetcode/auth').get_json()['logged_in'] is False
+        assert not app_module.db.get_setting('leetcode_session')
+
+
 class TestFileUpload:
     def test_upload_file(self, app_client):
         client, _ = app_client

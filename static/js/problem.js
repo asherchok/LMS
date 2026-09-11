@@ -828,3 +828,68 @@ async function uploadVideoFile(file) {
         status.textContent = 'Upload failed';
     }
 }
+
+// ── LeetCode: import my accepted submission (on-demand) ────
+
+// Map LeetCode language slugs to this editor's language values.
+const LC_LANG_MAP = {
+    python: 'python', python3: 'python', pythondata: 'python',
+    golang: 'go', bash: 'shell',
+    mysql: 'sql', mssql: 'sql', oraclesql: 'sql',
+};
+
+function mapLcLang(lc) {
+    if (!lc) return defaultLanguage;
+    const known = ['python','cpp','javascript','typescript','java','c','csharp','go',
+                   'rust','ruby','swift','kotlin','scala','sql','shell'];
+    return LC_LANG_MAP[lc] || (known.includes(lc) ? lc : 'plaintext');
+}
+
+async function importLeetCodeCode() {
+    const status = document.getElementById('lcImportStatus');
+    const setStatus = (m, c) => { status.textContent = m; status.style.color = c || 'var(--text-muted)'; };
+    if (!PROBLEM_SLUG) {
+        setStatus('No LeetCode slug on this problem — set the LeetCode # and re-fetch first.', 'var(--hard)');
+        return;
+    }
+    const tab = tabs.find(t => t.id === activeTabId);
+    if (!tab) return;
+    setStatus('Fetching your submissions from LeetCode…');
+    try {
+        const listResp = await fetch(`/api/leetcode/submissions/${PROBLEM_SLUG}`);
+        if (listResp.status === 401) { setStatus('Log in to LeetCode from the home page Settings first.', 'var(--hard)'); return; }
+        const list = await listResp.json();
+        const subs = list.submissions || [];
+        const accepted = subs.find(s => s.statusDisplay === 'Accepted') || subs[0];
+        if (!accepted) { setStatus('No submissions found for this problem.', 'var(--hard)'); return; }
+
+        const codeResp = await fetch(`/api/leetcode/submission/${accepted.id}`);
+        const detail = await codeResp.json();
+        if (!detail.code) { setStatus('Could not retrieve the submission code.', 'var(--hard)'); return; }
+
+        const when = accepted.timestamp
+            ? new Date(accepted.timestamp * 1000).toLocaleDateString() : '';
+        const lang = (detail.lang && detail.lang.name) || accepted.lang;
+        tab.content.push({type: 'markdown',
+            content: `**Imported from LeetCode** — ${accepted.statusDisplay || 'Accepted'}`
+                + `${when ? ' · ' + when : ''}`
+                + `${accepted.runtime ? ' · ' + accepted.runtime : ''}`
+                + `${accepted.memory ? ' · ' + accepted.memory : ''}`});
+        tab.content.push({type: 'code', language: mapLcLang(lang), content: detail.code});
+        renderBlocks(tab.content);
+        scheduleSave();
+
+        // Activate the problem on its real solve date (clears the imported flag
+        // so it now shows on the calendar on the day it was actually solved).
+        if (accepted.timestamp) {
+            const solvedIso = new Date(accepted.timestamp * 1000).toISOString();
+            fetch(`/api/problems/${PROBLEM_ID}`, {
+                method: 'PUT', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({created_at: solvedIso, imported: 0}),
+            });
+        }
+        setStatus('Imported your accepted submission.', 'var(--success)');
+    } catch {
+        setStatus('Failed to reach LeetCode.', 'var(--hard)');
+    }
+}

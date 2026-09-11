@@ -163,6 +163,24 @@
                 <div id="lcSyncStatus" style="font-size:11px;margin-top:4px"></div>
             </div>
         </div>
+        <div class="setting-row">
+            <div style="flex:1">
+                <div class="setting-label">LeetCode Account <span id="lcAuthState" style="font-weight:400;color:var(--text-muted)"></span></div>
+                <div class="setting-desc">Log in with your browser session to import <b>all</b> your solved problems (stored locally).</div>
+                <div id="lcLoginForm" style="margin-top:6px">
+                    <input type="password" class="form-input" id="lcSessionInput" placeholder="LEETCODE_SESSION cookie"
+                           style="font-size:12px;padding:5px 8px;font-family:var(--font-mono);width:100%;margin-bottom:5px" autocomplete="off">
+                    <input type="password" class="form-input" id="lcCsrfInput" placeholder="csrftoken cookie (optional)"
+                           style="font-size:12px;padding:5px 8px;font-family:var(--font-mono);width:100%;margin-bottom:6px" autocomplete="off">
+                    <button class="btn btn-sm btn-primary" onclick="leetcodeLogin()">Verify &amp; Log in</button>
+                </div>
+                <div id="lcAccountActions" class="hidden" style="margin-top:6px;display:flex;gap:6px;align-items:center">
+                    <button class="btn btn-sm btn-primary" onclick="backfillSolved()">Import solved problems</button>
+                    <button class="btn btn-sm btn-secondary" onclick="leetcodeLogout()">Log out</button>
+                </div>
+                <div id="lcAuthStatus" style="font-size:11px;margin-top:4px"></div>
+            </div>
+        </div>
         <div class="setting-row" style="border-bottom:none">
             <div style="flex:1">
                 <div class="setting-label">Data Directory</div>

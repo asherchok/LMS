@@ -392,9 +392,67 @@ async function syncLeetCode() {
     }
 }
 
+// ── LeetCode account (v2) ─────────────────────────────────
+
+async function loadAuthState() {
+    const resp = await fetch('/api/leetcode/auth');
+    const a = await resp.json();
+    const loggedIn = !!a.logged_in;
+    document.getElementById('lcLoginForm').classList.toggle('hidden', loggedIn);
+    document.getElementById('lcAccountActions').classList.toggle('hidden', !loggedIn);
+    document.getElementById('lcAuthState').textContent =
+        loggedIn ? `— logged in${a.username ? ' as ' + a.username : ''}` : '— not logged in';
+}
+
+async function leetcodeLogin() {
+    const session = document.getElementById('lcSessionInput').value.trim();
+    const csrf = document.getElementById('lcCsrfInput').value.trim();
+    const status = document.getElementById('lcAuthStatus');
+    if (!session) { status.textContent = 'Paste your LEETCODE_SESSION cookie.'; status.style.color = 'var(--hard)'; return; }
+    status.textContent = 'Verifying…'; status.style.color = 'var(--text-muted)';
+    try {
+        const resp = await fetch('/api/leetcode/login', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({session, csrf}),
+        });
+        const data = await resp.json();
+        if (!resp.ok) { status.textContent = data.error || 'Login failed'; status.style.color = 'var(--hard)'; return; }
+        document.getElementById('lcSessionInput').value = '';
+        document.getElementById('lcCsrfInput').value = '';
+        status.textContent = `Logged in as ${data.username}. Click "Import solved problems".`;
+        status.style.color = 'var(--success)';
+        await loadAuthState();
+    } catch {
+        status.textContent = 'Failed to reach LeetCode'; status.style.color = 'var(--hard)';
+    }
+}
+
+async function leetcodeLogout() {
+    await fetch('/api/leetcode/logout', {method: 'POST'});
+    document.getElementById('lcAuthStatus').textContent = 'Logged out.';
+    document.getElementById('lcAuthStatus').style.color = 'var(--text-muted)';
+    await loadAuthState();
+}
+
+async function backfillSolved() {
+    const status = document.getElementById('lcAuthStatus');
+    status.textContent = 'Importing your solved problems…'; status.style.color = 'var(--text-muted)';
+    try {
+        const resp = await fetch('/api/leetcode/backfill', {method: 'POST'});
+        const data = await resp.json();
+        if (!resp.ok) { status.textContent = data.error || 'Import failed'; status.style.color = 'var(--hard)'; return; }
+        status.textContent = `Imported ${data.created} new (${data.skipped} already tracked, ${data.solved_total} solved total).`;
+        status.style.color = 'var(--success)';
+        loadStats(); loadProblems(); loadCalendar(); loadContributions();
+    } catch {
+        status.textContent = 'Failed to reach LeetCode'; status.style.color = 'var(--hard)';
+    }
+}
+
 // ── Settings ──────────────────────────────────────────────
 
 async function showSettings() {
+    loadAuthState();
     const resp = await fetch('/api/settings');
     const settings = await resp.json();
     const langSel = document.getElementById('settingDefaultLang');

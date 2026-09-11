@@ -63,10 +63,15 @@ class Database:
                     value TEXT NOT NULL
                 );
             """)
-            # Migration: add title_slug for LeetCode sync matching
+            # Migrations
             cols = [r['name'] for r in c.execute("PRAGMA table_info(problems)").fetchall()]
             if 'title_slug' not in cols:
                 c.execute("ALTER TABLE problems ADD COLUMN title_slug TEXT")
+            # `imported` marks bulk-backfilled solved problems whose real solve
+            # date is unknown — they stay off the calendar/activity graph until
+            # engaged with (which sets a real created_at and clears the flag).
+            if 'imported' not in cols:
+                c.execute("ALTER TABLE problems ADD COLUMN imported INTEGER DEFAULT 0")
 
     # --- Settings ---
 
@@ -94,8 +99,8 @@ class Database:
             cur = c.execute(
                 """INSERT INTO problems
                    (leetcode_number, title, description, difficulty, elo_rating,
-                    source_url, tags, title_slug, created_at, last_visited_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                    source_url, tags, title_slug, imported, created_at, last_visited_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     data.get('leetcode_number'),
                     data['title'],
@@ -105,6 +110,7 @@ class Database:
                     data.get('source_url'),
                     json.dumps(data.get('tags', [])),
                     data.get('title_slug'),
+                    1 if data.get('imported') else 0,
                     created, now,
                 ),
             )
@@ -152,7 +158,7 @@ class Database:
         sets, vals = [], []
         for k in ('leetcode_number', 'title', 'description', 'difficulty',
                    'elo_rating', 'source_url', 'remind_date', 'last_visited_at',
-                   'title_slug'):
+                   'title_slug', 'imported', 'created_at'):
             if k in data:
                 sets.append(f"{k}=?")
                 vals.append(data[k])
@@ -274,7 +280,10 @@ class Database:
         end = f"{year + (1 if month == 12 else 0)}-{(month % 12) + 1:02d}-01"
         with self._conn() as c:
             created = c.execute(
-                "SELECT * FROM problems WHERE created_at>=? AND created_at<?", (start, end)
+                """SELECT * FROM problems
+                   WHERE created_at>=? AND created_at<?
+                   AND (imported IS NULL OR imported=0)""",
+                (start, end),
             ).fetchall()
             revisions = c.execute(
                 """SELECT r.revised_at, r.problem_id, p.title, p.leetcode_number, p.last_visited_at
@@ -305,7 +314,9 @@ class Database:
         start = (date.today() - timedelta(days=365)).isoformat()
         with self._conn() as c:
             created = c.execute(
-                "SELECT DATE(created_at) as day, COUNT(*) as n FROM problems WHERE DATE(created_at)>=? GROUP BY day",
+                """SELECT DATE(created_at) as day, COUNT(*) as n FROM problems
+                   WHERE DATE(created_at)>=? AND (imported IS NULL OR imported=0)
+                   GROUP BY day""",
                 (start,),
             ).fetchall()
             revised = c.execute(

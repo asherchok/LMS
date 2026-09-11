@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 from models import Database
 
 app = Flask(__name__)
-VERSION = '1.3.0'
+VERSION = '1.4.0'
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE, 'config.json')
@@ -199,6 +199,29 @@ query question($slug: String!) {
   }
 }"""
 
+_Q_USERSTATUS = "query { userStatus { username isSignedIn } }"
+
+_Q_SUBLIST = """
+query submissions($slug: String!, $offset: Int!, $limit: Int!) {
+  submissionList(questionSlug: $slug, offset: $offset, limit: $limit) {
+    hasNext
+    submissions { id statusDisplay lang timestamp runtime memory }
+  }
+}"""
+
+_Q_SUBDETAIL = """
+query submissionDetails($id: Int!) {
+  submissionDetails(submissionId: $id) {
+    code lang { name } runtime memory timestamp
+  }
+}"""
+
+# LeetCode difficulty level (from /api/problems/all/) → our difficulty label
+_LC_DIFFICULTY = {1: 'easy', 2: 'medium', 3: 'hard'}
+
+# Credential keys are stored in settings but must never be echoed to the client.
+_SENSITIVE_SETTINGS = {'leetcode_session', 'leetcode_csrf'}
+
 
 def _lc_post(query, variables):
     import requests as http
@@ -207,6 +230,37 @@ def _lc_post(query, variables):
         json={'query': query, 'variables': variables},
         headers=LEETCODE_HEADERS,
         timeout=15,
+    )
+    return resp.json()
+
+
+def _lc_cookie_headers(session, csrf):
+    """Build request headers carrying the LeetCode session cookie."""
+    cookie = f'LEETCODE_SESSION={session}'
+    headers = dict(LEETCODE_HEADERS)
+    if csrf:
+        cookie += f'; csrftoken={csrf}'
+        headers['x-csrftoken'] = csrf
+    headers['Cookie'] = cookie
+    return headers
+
+
+def _lc_auth_headers():
+    """Headers for the logged-in user, or None if no session is stored."""
+    session = db.get_setting('leetcode_session')
+    if not session:
+        return None
+    return _lc_cookie_headers(session, db.get_setting('leetcode_csrf'))
+
+
+def _lc_post_auth(query, variables):
+    import requests as http
+    headers = _lc_auth_headers()
+    resp = http.post(
+        LEETCODE_GRAPHQL,
+        json={'query': query, 'variables': variables},
+        headers=headers,
+        timeout=20,
     )
     return resp.json()
 
@@ -389,16 +443,155 @@ def api_leetcode_sync():
         return jsonify({'error': str(e)}), 500
 
 
+# ── API: LeetCode account (v2 — authenticated) ──────────────
+
+@app.route('/api/leetcode/auth')
+def api_leetcode_auth():
+    """Login state — never returns the token itself."""
+    return jsonify({
+        'logged_in': bool(db.get_setting('leetcode_session')),
+        'username': db.get_setting('leetcode_username'),
+    })
+
+
+@app.route('/api/leetcode/login', methods=['POST'])
+def api_leetcode_login():
+    """Store + verify a LEETCODE_SESSION (and csrftoken) copied from the browser."""
+    body = request.json or {}
+    session = (body.get('session') or '').strip()
+    csrf = (body.get('csrf') or '').strip()
+    if not session:
+        return jsonify({'error': 'LEETCODE_SESSION is required'}), 400
+    try:
+        import requests as http
+        resp = http.post(
+            LEETCODE_GRAPHQL,
+            json={'query': _Q_USERSTATUS, 'variables': {}},
+            headers=_lc_cookie_headers(session, csrf),
+            timeout=15,
+        )
+        status = (resp.json().get('data') or {}).get('userStatus') or {}
+        if not status.get('isSignedIn'):
+            return jsonify({'error': 'Invalid or expired session'}), 401
+        db.set_setting('leetcode_session', session)
+        db.set_setting('leetcode_csrf', csrf)
+        if status.get('username'):
+            db.set_setting('leetcode_username', status['username'])
+        return jsonify({'logged_in': True, 'username': status.get('username')})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/leetcode/logout', methods=['POST'])
+def api_leetcode_logout():
+    db.set_setting('leetcode_session', '')
+    db.set_setting('leetcode_csrf', '')
+    return jsonify({'logged_in': False})
+
+
+@app.route('/api/leetcode/backfill', methods=['POST'])
+def api_leetcode_backfill():
+    """Import ONLY the logged-in user's solved problems (status == 'ac').
+
+    A single authenticated request to /api/problems/all/ returns every problem
+    with the user's per-problem status; we keep the solved ones and create a
+    problem row for each that isn't already tracked. Existing rows (matched by
+    slug or number) are never duplicated and their notes/tabs are untouched.
+    """
+    headers = _lc_auth_headers()
+    if not headers:
+        return jsonify({'error': 'Not logged in'}), 401
+    try:
+        import requests as http
+        resp = http.get('https://leetcode.com/api/problems/all/', headers=headers, timeout=30)
+        pairs = resp.json().get('stat_status_pairs', [])
+        created, skipped = 0, 0
+        for p in pairs:
+            if p.get('status') != 'ac':          # solved only
+                continue
+            stat = p['stat']
+            slug = stat['question__title_slug']
+            try:
+                number = int(stat['frontend_question_id'])
+            except (TypeError, ValueError):
+                number = None
+
+            existing = db.get_problem_by_slug(slug) or db.get_problem_by_number(number)
+            if existing:
+                if not existing.get('title_slug'):
+                    db.update_problem(existing['id'], {'title_slug': slug})
+                skipped += 1
+                continue
+
+            db.create_problem({
+                'leetcode_number': number,
+                'title': stat['question__title'],
+                'title_slug': slug,
+                'difficulty': _LC_DIFFICULTY.get((p.get('difficulty') or {}).get('level'), 'medium'),
+                'source_url': f'https://leetcode.com/problems/{slug}/',
+                'tags': [],
+                'imported': True,          # unknown solve date — kept off the calendar
+            })
+            created += 1
+
+        # Store the real submission calendar so the activity graph reflects true
+        # historical dates instead of piling every import onto today.
+        username = db.get_setting('leetcode_username')
+        if username:
+            try:
+                profile = _fetch_profile(username)
+                if profile:
+                    db.set_setting('leetcode_profile', json.dumps(profile))
+                    db.set_setting('leetcode_calendar', json.dumps(profile['submissionCalendar']))
+            except Exception:
+                pass
+
+        db.set_setting('leetcode_last_backfill_at', datetime.now().isoformat())
+        return jsonify({'created': created, 'skipped': skipped,
+                        'solved_total': created + skipped})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/leetcode/submissions/<slug>')
+def api_leetcode_submissions(slug):
+    """The logged-in user's recent submissions for one problem (on-demand)."""
+    if not _lc_auth_headers():
+        return jsonify({'error': 'Not logged in'}), 401
+    try:
+        data = _lc_post_auth(_Q_SUBLIST, {'slug': slug, 'offset': 0, 'limit': 20})
+        return jsonify((data.get('data') or {}).get('submissionList') or
+                       {'hasNext': False, 'submissions': []})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/leetcode/submission/<int:sid>')
+def api_leetcode_submission_code(sid):
+    """The actual submitted code for one submission (on-demand)."""
+    if not _lc_auth_headers():
+        return jsonify({'error': 'Not logged in'}), 401
+    try:
+        data = _lc_post_auth(_Q_SUBDETAIL, {'id': sid})
+        return jsonify((data.get('data') or {}).get('submissionDetails') or {})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 # ── API: Settings ────────────────────────────────────────────
 
 @app.route('/api/settings', methods=['GET'])
 def api_get_settings():
-    return jsonify(db.get_all_settings())
+    # Never expose credential tokens to the browser.
+    return jsonify({k: v for k, v in db.get_all_settings().items()
+                    if k not in _SENSITIVE_SETTINGS})
 
 
 @app.route('/api/settings', methods=['PUT'])
 def api_update_settings():
     for k, v in (request.json or {}).items():
+        if k in _SENSITIVE_SETTINGS:
+            continue  # credentials only set via /api/leetcode/login
         db.set_setting(k, v)
     return jsonify({'ok': True})
 
