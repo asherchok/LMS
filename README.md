@@ -15,6 +15,7 @@ A portable, local-first notebook for tracking and reviewing LeetCode problems. S
 - **Problem editor**: split-pane view with problem description on the left, jupyter-style code + commentary blocks on the right (Monaco editor, markdown with KaTeX math and Mermaid diagrams)
 - **Tagging and filtering**: multi-tag AND filtering, difficulty tracking (Easy/Medium/Hard), optional Elo ratings
 - **LeetCode fetch**: pull problem details directly by number
+- **LeetCode sync**: connect a public username (no login) to import your recent accepted submissions, log re-solves as revisions, and overlay your submission calendar onto the activity graph
 - **Dark/light mode**: toggle from any page
 
 ## Setup

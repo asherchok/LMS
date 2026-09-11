@@ -63,6 +63,10 @@ class Database:
                     value TEXT NOT NULL
                 );
             """)
+            # Migration: add title_slug for LeetCode sync matching
+            cols = [r['name'] for r in c.execute("PRAGMA table_info(problems)").fetchall()]
+            if 'title_slug' not in cols:
+                c.execute("ALTER TABLE problems ADD COLUMN title_slug TEXT")
 
     # --- Settings ---
 
@@ -84,12 +88,14 @@ class Database:
 
     def create_problem(self, data):
         now = datetime.now().isoformat()
+        # created_at may be overridden (e.g. LeetCode solve timestamp on sync)
+        created = data.get('created_at') or now
         with self._conn() as c:
             cur = c.execute(
                 """INSERT INTO problems
                    (leetcode_number, title, description, difficulty, elo_rating,
-                    source_url, tags, created_at, last_visited_at)
-                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                    source_url, tags, title_slug, created_at, last_visited_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
                 (
                     data.get('leetcode_number'),
                     data['title'],
@@ -98,7 +104,8 @@ class Database:
                     data.get('elo_rating'),
                     data.get('source_url'),
                     json.dumps(data.get('tags', [])),
-                    now, now,
+                    data.get('title_slug'),
+                    created, now,
                 ),
             )
             pid = cur.lastrowid
@@ -117,10 +124,35 @@ class Database:
                 return d
         return None
 
+    def get_problem_by_slug(self, slug):
+        if not slug:
+            return None
+        with self._conn() as c:
+            row = c.execute("SELECT * FROM problems WHERE title_slug=?", (slug,)).fetchone()
+            if row:
+                d = dict(row)
+                d['tags'] = json.loads(d['tags'])
+                return d
+        return None
+
+    def get_problem_by_number(self, number):
+        if number is None:
+            return None
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT * FROM problems WHERE leetcode_number=?", (number,)
+            ).fetchone()
+            if row:
+                d = dict(row)
+                d['tags'] = json.loads(d['tags'])
+                return d
+        return None
+
     def update_problem(self, pid, data):
         sets, vals = [], []
         for k in ('leetcode_number', 'title', 'description', 'difficulty',
-                   'elo_rating', 'source_url', 'remind_date', 'last_visited_at'):
+                   'elo_rating', 'source_url', 'remind_date', 'last_visited_at',
+                   'title_slug'):
             if k in data:
                 sets.append(f"{k}=?")
                 vals.append(data[k])
@@ -193,11 +225,12 @@ class Database:
 
     # --- Revisions ---
 
-    def add_revision(self, pid):
-        today = date.today().isoformat()
+    def add_revision(self, pid, revised_at=None):
+        # revised_at may be overridden (e.g. LeetCode re-submission date on sync)
+        day = revised_at or date.today().isoformat()
         now = datetime.now().isoformat()
         with self._conn() as c:
-            c.execute("INSERT INTO revisions (problem_id,revised_at) VALUES (?,?)", (pid, today))
+            c.execute("INSERT INTO revisions (problem_id,revised_at) VALUES (?,?)", (pid, day))
             c.execute(
                 "UPDATE problems SET revision_count=revision_count+1, last_visited_at=? WHERE id=?",
                 (now, pid),

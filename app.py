@@ -3,11 +3,11 @@ import json
 import os
 import re
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from models import Database
 
 app = Flask(__name__)
-VERSION = '1.2.0'
+VERSION = '1.3.0'
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE, 'config.json')
@@ -151,7 +151,90 @@ def api_calendar(year, month):
 
 @app.route('/api/contributions')
 def api_contributions():
-    return jsonify(db.get_contribution_data())
+    activity = db.get_contribution_data()
+    # Overlay LeetCode's public submission calendar (full-year daily counts).
+    # Use max per day so synced problems (already counted locally on their solve
+    # date) aren't double-counted, while historical LeetCode-only days fill in.
+    raw = db.get_setting('leetcode_calendar')
+    if raw:
+        try:
+            for ts, cnt in json.loads(raw).items():
+                day = datetime.fromtimestamp(int(ts), timezone.utc).date().isoformat()
+                activity[day] = max(activity.get(day, 0), int(cnt))
+        except (ValueError, TypeError):
+            pass
+    return jsonify(activity)
+
+
+# ── LeetCode GraphQL helpers ────────────────────────────────
+
+LEETCODE_GRAPHQL = 'https://leetcode.com/graphql'
+LEETCODE_HEADERS = {
+    'Content-Type': 'application/json',
+    'Referer': 'https://leetcode.com',
+    'User-Agent': 'Mozilla/5.0',
+}
+
+_Q_PROFILE = """
+query userProfile($username: String!) {
+  matchedUser(username: $username) {
+    username
+    profile { realName ranking reputation }
+    submitStatsGlobal { acSubmissionNum { difficulty count } }
+    userCalendar { streak totalActiveDays submissionCalendar }
+  }
+}"""
+
+_Q_RECENT = """
+query recentAc($username: String!, $limit: Int!) {
+  recentAcSubmissionList(username: $username, limit: $limit) {
+    title titleSlug timestamp
+  }
+}"""
+
+_Q_QUESTION = """
+query question($slug: String!) {
+  question(titleSlug: $slug) {
+    questionFrontendId title difficulty topicTags { name } content
+  }
+}"""
+
+
+def _lc_post(query, variables):
+    import requests as http
+    resp = http.post(
+        LEETCODE_GRAPHQL,
+        json={'query': query, 'variables': variables},
+        headers=LEETCODE_HEADERS,
+        timeout=15,
+    )
+    return resp.json()
+
+
+def _fetch_profile(username):
+    """Public profile snapshot: solved counts, ranking, streak, calendar."""
+    data = _lc_post(_Q_PROFILE, {'username': username})
+    mu = (data.get('data') or {}).get('matchedUser')
+    if not mu:
+        return None
+    counts = {
+        x['difficulty'].lower(): x['count']
+        for x in (mu.get('submitStatsGlobal') or {}).get('acSubmissionNum', [])
+    }
+    cal = mu.get('userCalendar') or {}
+    try:
+        sub_cal = json.loads(cal.get('submissionCalendar') or '{}')
+    except (ValueError, TypeError):
+        sub_cal = {}
+    return {
+        'username': mu.get('username'),
+        'realName': (mu.get('profile') or {}).get('realName'),
+        'ranking': (mu.get('profile') or {}).get('ranking'),
+        'solved': counts,                     # keys: all, easy, medium, hard
+        'streak': cal.get('streak'),
+        'totalActiveDays': cal.get('totalActiveDays'),
+        'submissionCalendar': sub_cal,        # {unix_day: count}
+    }
 
 
 # ── API: LeetCode fetch ─────────────────────────────────────
@@ -187,6 +270,121 @@ def api_fetch_leetcode(number):
                     'source_url': f"https://leetcode.com/problems/{q['titleSlug']}/",
                 })
         return jsonify({'error': 'Problem not found'}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/leetcode/profile/<username>')
+def api_leetcode_profile(username):
+    """Live public profile fetch (stats + submission calendar) by username."""
+    try:
+        profile = _fetch_profile(username)
+        if not profile:
+            return jsonify({'error': 'User not found'}), 404
+        return jsonify(profile)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/leetcode/cached')
+def api_leetcode_cached():
+    """Last-synced profile snapshot stored locally (empty dict if none)."""
+    raw = db.get_setting('leetcode_profile')
+    return jsonify(json.loads(raw) if raw else {})
+
+
+@app.route('/api/leetcode/sync', methods=['POST'])
+def api_leetcode_sync():
+    """Incrementally import a user's recent accepted submissions.
+
+    Public-by-username only pulls the last ~20 accepted submissions. We use a
+    stored high-water-mark timestamp so each sync processes only submissions
+    newer than the previous run — new problems are created, re-submissions of
+    already-tracked problems are logged as revisions (reps). Existing problems
+    (matched by title_slug or leetcode_number) are never duplicated and their
+    notes/tabs are never touched.
+    """
+    body = request.json or {}
+    username = (body.get('username') or db.get_setting('leetcode_username') or '').strip()
+    if not username:
+        return jsonify({'error': 'No username provided'}), 400
+
+    try:
+        profile = _fetch_profile(username)
+        if not profile:
+            return jsonify({'error': 'User not found'}), 404
+
+        data = _lc_post(_Q_RECENT, {'username': username, 'limit': 20})
+        subs = (data.get('data') or {}).get('recentAcSubmissionList') or []
+
+        last_ts = int(db.get_setting('leetcode_last_sync_ts', '0') or '0')
+        first_sync = last_ts == 0
+        max_ts = last_ts
+        new_problems, reps = [], []
+
+        # Oldest first so a first-solve is created before a same-batch rep.
+        for s in sorted(subs, key=lambda x: int(x['timestamp'])):
+            ts = int(s['timestamp'])
+            if ts <= last_ts:
+                continue
+            max_ts = max(max_ts, ts)
+            slug = s['titleSlug']
+            solved_iso = datetime.fromtimestamp(ts).isoformat()
+            day = solved_iso[:10]
+
+            existing = db.get_problem_by_slug(slug)
+            if existing:
+                db.add_revision(existing['id'], revised_at=day)
+                reps.append({'id': existing['id'], 'title': existing['title'],
+                             'title_slug': slug})
+                continue
+
+            # Unknown slug — fetch full metadata (needed to create anyway).
+            meta = (_lc_post(_Q_QUESTION, {'slug': slug}).get('data') or {}).get('question')
+            if not meta:
+                continue
+            number = int(meta['questionFrontendId'])
+
+            # Guard: a pre-existing problem (e.g. created before slugs existed,
+            # possibly with notes) tracked by number — backfill slug + log rep,
+            # don't create a duplicate.
+            by_num = db.get_problem_by_number(number)
+            if by_num:
+                db.update_problem(by_num['id'], {'title_slug': slug})
+                db.add_revision(by_num['id'], revised_at=day)
+                reps.append({'id': by_num['id'], 'title': by_num['title'],
+                             'title_slug': slug})
+                continue
+
+            pid = db.create_problem({
+                'leetcode_number': number,
+                'title': meta['title'],
+                'title_slug': slug,
+                'difficulty': meta['difficulty'].lower(),
+                'description': meta.get('content') or '',
+                'tags': [t['name'] for t in meta.get('topicTags', [])],
+                'source_url': f'https://leetcode.com/problems/{slug}/',
+                'created_at': solved_iso,
+            })
+            new_problems.append({'id': pid, 'title': meta['title'],
+                                 'title_slug': slug, 'leetcode_number': number})
+
+        # Persist username, profile snapshot, calendar, and watermark.
+        db.set_setting('leetcode_username', username)
+        db.set_setting('leetcode_profile', json.dumps(profile))
+        db.set_setting('leetcode_calendar', json.dumps(profile['submissionCalendar']))
+        db.set_setting('leetcode_last_sync_ts', str(max_ts))
+        db.set_setting('leetcode_last_sync_at', datetime.now().isoformat())
+
+        return jsonify({
+            'username': username,
+            'first_sync': first_sync,
+            'new': new_problems,
+            'reps': reps,
+            'new_count': len(new_problems),
+            'rep_count': len(reps),
+            'profile': profile,
+        })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

@@ -16,6 +16,7 @@ function loadAll() {
     loadStats();
     loadContributions();
     loadProblems();
+    loadLeetCode();
 }
 
 // ── Calendar ──────────────────────────────────────────────
@@ -326,6 +327,71 @@ function filterProblems() {
     applyFilters();
 }
 
+// ── LeetCode ──────────────────────────────────────────────
+
+async function loadLeetCode() {
+    const resp = await fetch('/api/leetcode/cached');
+    const p = await resp.json();
+    renderLeetCode(p);
+}
+
+function renderLeetCode(p) {
+    const el = document.getElementById('lcPanel');
+    if (!p || !p.username) {
+        el.classList.add('hidden');
+        el.innerHTML = '';
+        return;
+    }
+    const s = p.solved || {};
+    el.classList.remove('hidden');
+    el.innerHTML = `
+        <div class="lc-panel-head">
+            <div>
+                <span class="lc-badge">LeetCode</span>
+                <a class="lc-user" href="https://leetcode.com/u/${p.username}/" target="_blank" rel="noopener">@${p.username}</a>
+                ${p.ranking ? `<span class="lc-rank">Rank #${p.ranking.toLocaleString()}</span>` : ''}
+            </div>
+            <button class="btn btn-sm btn-secondary" onclick="syncLeetCode()">↻ Sync</button>
+        </div>
+        <div class="lc-stats">
+            <div class="lc-stat"><span class="lc-num">${s.all || 0}</span><span class="lc-cap">Solved</span></div>
+            <div class="lc-stat"><span class="lc-num easy">${s.easy || 0}</span><span class="lc-cap">Easy</span></div>
+            <div class="lc-stat"><span class="lc-num medium">${s.medium || 0}</span><span class="lc-cap">Medium</span></div>
+            <div class="lc-stat"><span class="lc-num hard">${s.hard || 0}</span><span class="lc-cap">Hard</span></div>
+            <div class="lc-stat"><span class="lc-num">${p.streak || 0}</span><span class="lc-cap">Streak</span></div>
+            <div class="lc-stat"><span class="lc-num">${p.totalActiveDays || 0}</span><span class="lc-cap">Active days</span></div>
+        </div>`;
+}
+
+async function syncLeetCode() {
+    const status = document.getElementById('lcSyncStatus');
+    const username = (document.getElementById('lcUsernameInput')?.value || '').trim();
+    const setStatus = (msg, color) => { if (status) { status.textContent = msg; status.style.color = color; } };
+    setStatus('Syncing from LeetCode…', 'var(--text-muted)');
+    try {
+        const resp = await fetch('/api/leetcode/sync', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(username ? {username} : {}),
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+            setStatus(data.error || 'Sync failed', 'var(--hard)');
+            return;
+        }
+        const msg = `Synced @${data.username}: ${data.new_count} new, ${data.rep_count} rep${data.rep_count !== 1 ? 's' : ''}.`;
+        setStatus(msg, 'var(--success)');
+        renderLeetCode(data.profile);
+        // Refresh views that the sync may have changed.
+        loadCalendar();
+        loadStats();
+        loadContributions();
+        loadProblems();
+    } catch {
+        setStatus('Failed to reach LeetCode', 'var(--hard)');
+    }
+}
+
 // ── Settings ──────────────────────────────────────────────
 
 async function showSettings() {
@@ -333,6 +399,14 @@ async function showSettings() {
     const settings = await resp.json();
     const langSel = document.getElementById('settingDefaultLang');
     langSel.value = settings.default_language || 'python';
+    document.getElementById('lcUsernameInput').value = settings.leetcode_username || '';
+    const lcStatus = document.getElementById('lcSyncStatus');
+    if (settings.leetcode_last_sync_at) {
+        lcStatus.textContent = 'Last synced: ' + new Date(settings.leetcode_last_sync_at).toLocaleString();
+        lcStatus.style.color = 'var(--text-muted)';
+    } else {
+        lcStatus.textContent = '';
+    }
 
     const cfgResp = await fetch('/api/config');
     const cfg = await cfgResp.json();

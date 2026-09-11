@@ -35,6 +35,9 @@
             <div class="calendar-grid" id="calendarGrid"></div>
         </div>
 
+        <!-- LeetCode profile panel (populated when a username is synced) -->
+        <div class="lc-panel hidden" id="lcPanel"></div>
+
         <!-- Stats row -->
         <div class="stats-row" id="statsRow"></div>
 
@@ -147,6 +150,18 @@
                 <option value="scala">Scala</option>
                 <option value="sql">SQL</option>
             </select>
+        </div>
+        <div class="setting-row">
+            <div style="flex:1">
+                <div class="setting-label">LeetCode Username</div>
+                <div class="setting-desc">Public profile — sync solved problems &amp; activity (no login)</div>
+                <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
+                    <input type="text" class="form-input" id="lcUsernameInput" placeholder="e.g. neetcode"
+                           style="font-size:12px;padding:5px 8px" onchange="saveSetting('leetcode_username', this.value.trim())">
+                    <button class="btn btn-sm btn-primary" onclick="syncLeetCode()">Sync</button>
+                </div>
+                <div id="lcSyncStatus" style="font-size:11px;margin-top:4px"></div>
+            </div>
         </div>
         <div class="setting-row" style="border-bottom:none">
             <div style="flex:1">

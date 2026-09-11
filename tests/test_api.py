@@ -286,6 +286,145 @@ class TestLeetCodeFetch:
         assert 'network error' in resp.get_json()['error']
 
 
+# ── LeetCode profile + sync (public-by-username) ────────────
+
+MATCHED_USER = {
+    'username': 'neetcode',
+    'profile': {'realName': 'Neet', 'ranking': 12345, 'reputation': 1},
+    'submitStatsGlobal': {'acSubmissionNum': [
+        {'difficulty': 'All', 'count': 2},
+        {'difficulty': 'Easy', 'count': 1},
+        {'difficulty': 'Medium', 'count': 1},
+        {'difficulty': 'Hard', 'count': 0},
+    ]},
+    'userCalendar': {'streak': 3, 'totalActiveDays': 10,
+                     'submissionCalendar': '{"1700000000": 2}'},
+}
+
+QUESTIONS = {
+    'two-sum': {'questionFrontendId': '1', 'title': 'Two Sum', 'difficulty': 'Easy',
+                'topicTags': [{'name': 'Array'}], 'content': '<p>two sum</p>'},
+    'add-two-numbers': {'questionFrontendId': '2', 'title': 'Add Two Numbers',
+                        'difficulty': 'Medium', 'topicTags': [{'name': 'Linked List'}],
+                        'content': '<p>add</p>'},
+}
+
+
+def make_lc_post(recent, matched_user=MATCHED_USER, questions=QUESTIONS):
+    """Fake requests.post that dispatches on the GraphQL query string."""
+    def fake_post(url, json=None, **kwargs):
+        q, v = json['query'], json['variables']
+        m = MagicMock()
+        if 'matchedUser' in q:
+            m.json.return_value = {'data': {'matchedUser': matched_user}}
+        elif 'recentAcSubmissionList' in q:
+            m.json.return_value = {'data': {'recentAcSubmissionList': recent}}
+        elif 'question(titleSlug' in q:
+            m.json.return_value = {'data': {'question': questions.get(v['slug'])}}
+        else:
+            m.json.return_value = {'data': {}}
+        return m
+    return fake_post
+
+
+class TestLeetCodeProfile:
+    def test_profile_success(self, app_client):
+        client, _ = app_client
+        with patch('requests.post', side_effect=make_lc_post([])):
+            resp = client.get('/api/leetcode/profile/neetcode')
+        data = resp.get_json()
+        assert resp.status_code == 200
+        assert data['username'] == 'neetcode'
+        assert data['solved']['all'] == 2
+        assert data['streak'] == 3
+        assert data['submissionCalendar'] == {'1700000000': 2}
+
+    def test_profile_not_found(self, app_client):
+        client, _ = app_client
+
+        def no_user(url, json=None, **kwargs):
+            m = MagicMock()
+            m.json.return_value = {'data': {'matchedUser': None}}
+            return m
+        with patch('requests.post', side_effect=no_user):
+            resp = client.get('/api/leetcode/profile/ghost')
+        assert resp.status_code == 404
+
+
+class TestLeetCodeSync:
+    def test_initial_sync_creates_problems(self, app_client):
+        client, app_module = app_client
+        recent = [
+            {'title': 'Two Sum', 'titleSlug': 'two-sum', 'timestamp': '1700000100'},
+            {'title': 'Add Two Numbers', 'titleSlug': 'add-two-numbers', 'timestamp': '1700000200'},
+        ]
+        with patch('requests.post', side_effect=make_lc_post(recent)):
+            resp = client.post('/api/leetcode/sync', json={'username': 'neetcode'})
+        data = resp.get_json()
+        assert resp.status_code == 200
+        assert data['new_count'] == 2
+        assert data['rep_count'] == 0
+        # Problem created with slug + real solve date as created_at.
+        p = app_module.db.get_problem_by_slug('two-sum')
+        assert p is not None
+        assert p['leetcode_number'] == 1
+        assert p['created_at'].startswith('2023-11-14')  # ts 1700000100
+
+    def test_rep_detected_for_existing_slug(self, app_client):
+        client, app_module = app_client
+        pid = app_module.db.create_problem(
+            {'title': 'Two Sum', 'title_slug': 'two-sum', 'leetcode_number': 1})
+        recent = [{'title': 'Two Sum', 'titleSlug': 'two-sum', 'timestamp': '1700000100'}]
+        with patch('requests.post', side_effect=make_lc_post(recent)):
+            resp = client.post('/api/leetcode/sync', json={'username': 'neetcode'})
+        data = resp.get_json()
+        assert data['new_count'] == 0
+        assert data['rep_count'] == 1
+        assert len(app_module.db.get_revisions(pid)) == 1
+
+    def test_dedup_by_number_protects_notes(self, app_client):
+        client, app_module = app_client
+        # Pre-existing problem tracked by number only (no slug), with notes.
+        pid = app_module.db.create_problem({'title': 'Two Sum', 'leetcode_number': 1})
+        tabs = app_module.db.get_tabs(pid)
+        app_module.db.update_tab(tabs[0]['id'], {'content': [{'note': 'my solution'}]})
+
+        recent = [{'title': 'Two Sum', 'titleSlug': 'two-sum', 'timestamp': '1700000100'}]
+        with patch('requests.post', side_effect=make_lc_post(recent)):
+            resp = client.post('/api/leetcode/sync', json={'username': 'neetcode'})
+        data = resp.get_json()
+        # No duplicate created; treated as a rep of the existing problem.
+        assert data['new_count'] == 0
+        assert data['rep_count'] == 1
+        assert app_module.db.get_problem_by_slug('two-sum')['id'] == pid
+        # Notes preserved.
+        assert app_module.db.get_tabs(pid)[0]['content'] == [{'note': 'my solution'}]
+
+    def test_watermark_skips_already_synced(self, app_client):
+        client, app_module = app_client
+        recent = [{'title': 'Two Sum', 'titleSlug': 'two-sum', 'timestamp': '1700000100'}]
+        with patch('requests.post', side_effect=make_lc_post(recent)):
+            client.post('/api/leetcode/sync', json={'username': 'neetcode'})
+            resp = client.post('/api/leetcode/sync', json={'username': 'neetcode'})
+        data = resp.get_json()
+        assert data['new_count'] == 0
+        assert data['rep_count'] == 0
+
+    def test_calendar_merged_into_contributions(self, app_client):
+        client, _ = app_client
+        with patch('requests.post', side_effect=make_lc_post([])):
+            client.post('/api/leetcode/sync', json={'username': 'neetcode'})
+        resp = client.get('/api/contributions')
+        data = resp.get_json()
+        # ts 1700000000 → 2023-11-14 (UTC), count 2 from submissionCalendar.
+        assert data.get('2023-11-14') == 2
+
+    def test_sync_requires_username(self, app_client):
+        client, _ = app_client
+        resp = client.post('/api/leetcode/sync', json={})
+        assert resp.status_code == 400
+
+
 class TestFileUpload:
     def test_upload_file(self, app_client):
         client, _ = app_client
