@@ -199,5 +199,5 @@ class LeetCodeProvider(Provider):
         headers = self._cookie_headers(creds)
         if not headers:
             return None
-        data = self._post(_Q_SUBDETAIL, {'id': submission_id}, headers=headers)
+        data = self._post(_Q_SUBDETAIL, {'id': int(submission_id)}, headers=headers)
         return (data.get('data') or {}).get('submissionDetails') or {}

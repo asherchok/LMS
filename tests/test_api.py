@@ -558,6 +558,59 @@ class TestLeetCodeAccount:
         assert not app_module.db.get_setting('leetcode_session')
 
 
+class TestProviderRoutes:
+    def test_list_providers(self, app_client):
+        client, _ = app_client
+        data = client.get('/api/providers').get_json()
+        lc = next(p for p in data if p['id'] == 'leetcode')
+        assert lc['name'] == 'LeetCode'
+        assert 'auth_backfill' in lc['capabilities']
+        assert {'key': 'session', 'label': 'LEETCODE_SESSION'} in lc['auth_fields']
+        assert lc['logged_in'] is False
+
+    def test_unknown_platform_404(self, app_client):
+        client, _ = app_client
+        assert client.get('/api/providers/hackerrank/profile/x').status_code == 404
+        assert client.post('/api/providers/hackerrank/sync').status_code == 404
+
+    def test_generic_profile_matches_alias(self, app_client):
+        client, _ = app_client
+        with patch('requests.post', side_effect=make_lc_post([])):
+            generic = client.get('/api/providers/leetcode/profile/neetcode').get_json()
+            alias = client.get('/api/leetcode/profile/neetcode').get_json()
+        assert generic == alias
+        assert generic['username'] == 'neetcode'
+
+    def test_generic_sync_creates_problems(self, app_client):
+        client, app_module = app_client
+        recent = [{'title': 'Two Sum', 'titleSlug': 'two-sum', 'timestamp': '1700000100'}]
+        with patch('requests.post', side_effect=make_lc_post(recent)):
+            resp = client.post('/api/providers/leetcode/sync', json={'username': 'neetcode'})
+        assert resp.get_json()['new_count'] == 1
+        assert app_module.db.get_problem_by_external('leetcode', '1') is not None
+
+    def test_generic_login_and_backfill(self, app_client):
+        client, app_module = app_client
+        with patch('requests.post', side_effect=signed_in_post()):
+            login = client.post('/api/providers/leetcode/login',
+                                json={'session': 'sess', 'csrf': 'c'})
+        assert login.get_json()['username'] == 'votrubac'
+        mock_get = MagicMock()
+        mock_get.json.return_value = problems_all_payload({'two-sum': 'ac'})
+        with patch('requests.get', return_value=mock_get):
+            bf = client.post('/api/providers/leetcode/backfill')
+        assert bf.get_json()['created'] == 1
+
+    def test_capability_gating(self, app_client, monkeypatch):
+        client, app_module = app_client
+        # Temporarily strip a capability and confirm the route rejects it.
+        from providers import get_provider, PUBLIC_RECENT
+        lc = get_provider('leetcode')
+        monkeypatch.setattr(lc, 'capabilities', lc.capabilities - {PUBLIC_RECENT})
+        resp = client.post('/api/providers/leetcode/sync', json={'username': 'x'})
+        assert resp.status_code == 400
+
+
 class TestEnrichProblem:
     def test_enrich_fills_empty_description(self, app_client):
         client, app_module = app_client

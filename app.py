@@ -5,7 +5,8 @@ import re
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from models import Database
-from providers import get_provider, sensitive_setting_keys
+from providers import (get_provider, sensitive_setting_keys, PROVIDERS,
+                       PUBLIC_PROFILE, PUBLIC_RECENT, AUTH_BACKFILL, SUBMISSION_CODE)
 
 app = Flask(__name__)
 VERSION = '1.4.0'
@@ -187,31 +188,38 @@ def _provider_creds(provider):
     return creds if creds.get('session') else None
 
 
-# ── API: LeetCode fetch ─────────────────────────────────────
+def _resolve_provider(platform):
+    """Return (provider, None) or (None, error_response) for an unknown id."""
+    provider = get_provider(platform)
+    if not provider:
+        return None, (jsonify({'error': f'Unknown platform: {platform}'}), 404)
+    return provider, None
 
-@app.route('/api/leetcode/<int:number>')
-def api_fetch_leetcode(number):
+
+# ── Provider service layer ──────────────────────────────────
+# Platform-agnostic route bodies. Both the generic /api/providers/<platform>/*
+# routes and the legacy /api/leetcode/* aliases call these with a provider.
+
+def _svc_fetch_problem_by_number(provider, number):
     try:
-        prob = LEETCODE.fetch_problem_by_number(number)
+        prob = provider.fetch_problem_by_number(number)
         if not prob:
             return jsonify({'error': 'Problem not found'}), 404
+        ext = prob.get('external_id')
         return jsonify({
-            'leetcode_number': int(prob['external_id']),
-            'title': prob['title'],
-            'description': prob['description'],
-            'difficulty': prob['difficulty'],
-            'tags': prob['tags'],
+            **prob,
             'source_url': prob['url'],
+            'leetcode_number': int(ext) if (ext or '').isdigit() else None,
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/leetcode/profile/<username>')
-def api_leetcode_profile(username):
-    """Live public profile fetch (stats + submission calendar) by username."""
+def _svc_profile(provider, username):
+    if not provider.has(PUBLIC_PROFILE):
+        return jsonify({'error': f'{provider.name} has no public profiles'}), 400
     try:
-        profile = LEETCODE.fetch_profile(username)
+        profile = provider.fetch_profile(username)
         if not profile:
             return jsonify({'error': 'User not found'}), 404
         return jsonify(profile)
@@ -219,37 +227,28 @@ def api_leetcode_profile(username):
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/leetcode/cached')
-def api_leetcode_cached():
-    """Last-synced profile snapshot stored locally (empty dict if none)."""
-    raw = db.get_setting(_pkey(LEETCODE, 'profile'))
+def _svc_cached(provider):
+    raw = db.get_setting(_pkey(provider, 'profile'))
     return jsonify(json.loads(raw) if raw else {})
 
 
-@app.route('/api/leetcode/sync', methods=['POST'])
-def api_leetcode_sync():
-    """Incrementally import a user's recent accepted submissions.
-
-    Public-by-username only pulls the last ~20 accepted submissions. We use a
-    stored high-water-mark timestamp so each sync processes only submissions
-    newer than the previous run — new problems are created, re-submissions of
-    already-tracked problems are logged as revisions (reps). Existing problems
-    (matched by title_slug or leetcode_number) are never duplicated and their
-    notes/tabs are never touched.
-    """
+def _svc_sync(provider):
+    if not provider.has(PUBLIC_RECENT):
+        return jsonify({'error': f'{provider.name} has no username sync'}), 400
     body = request.json or {}
-    username = (body.get('username') or db.get_setting(_pkey(LEETCODE, 'username')) or '').strip()
+    username = (body.get('username') or db.get_setting(_pkey(provider, 'username')) or '').strip()
     if not username:
         return jsonify({'error': 'No username provided'}), 400
-
     try:
-        profile = LEETCODE.fetch_profile(username)
-        if not profile:
-            return jsonify({'error': 'User not found'}), 404
+        profile = None
+        if provider.has(PUBLIC_PROFILE):
+            profile = provider.fetch_profile(username)
+            if not profile:
+                return jsonify({'error': 'User not found'}), 404
 
-        subs = LEETCODE.recent_submissions(username, 20)
+        subs = provider.recent_submissions(username, 20)
 
-        last_ts = int(db.get_setting(_pkey(LEETCODE, 'last_sync_ts'), '0') or '0')
+        last_ts = int(db.get_setting(_pkey(provider, 'last_sync_ts'), '0') or '0')
         first_sync = last_ts == 0
         max_ts = last_ts
         new_problems, reps = [], []
@@ -264,7 +263,7 @@ def api_leetcode_sync():
             solved_iso = datetime.fromtimestamp(ts).isoformat()
             day = solved_iso[:10]
 
-            existing = db.get_problem_by_slug(slug, LEETCODE.id)
+            existing = db.get_problem_by_slug(slug, provider.id)
             if existing:
                 db.add_revision(existing['id'], revised_at=day)
                 reps.append({'id': existing['id'], 'title': existing['title'],
@@ -272,15 +271,13 @@ def api_leetcode_sync():
                 continue
 
             # Unknown slug — fetch full metadata (needed to create anyway).
-            meta = LEETCODE.fetch_problem(slug)
+            meta = provider.fetch_problem(slug)
             if not meta:
                 continue
-            number = int(meta['external_id'])
 
-            # Guard: a pre-existing problem (e.g. created before slugs existed,
-            # possibly with notes) tracked by external id — backfill slug + log
-            # rep, don't create a duplicate.
-            by_ext = db.get_problem_by_external(LEETCODE.id, meta['external_id'])
+            # Guard: a pre-existing problem (possibly with notes) tracked by
+            # external id — backfill slug + log rep, don't create a duplicate.
+            by_ext = db.get_problem_by_external(provider.id, meta['external_id'])
             if by_ext:
                 db.update_problem(by_ext['id'], {'title_slug': slug})
                 db.add_revision(by_ext['id'], revised_at=day)
@@ -289,9 +286,9 @@ def api_leetcode_sync():
                 continue
 
             pid = db.create_problem({
-                'platform': LEETCODE.id,
+                'platform': provider.id,
                 'external_id': meta['external_id'],
-                'leetcode_number': number,
+                'leetcode_number': _legacy_number(provider, meta['external_id']),
                 'title': meta['title'],
                 'title_slug': slug,
                 'difficulty': meta['difficulty'] or 'medium',
@@ -301,97 +298,81 @@ def api_leetcode_sync():
                 'created_at': solved_iso,
             })
             new_problems.append({'id': pid, 'title': meta['title'],
-                                 'title_slug': slug, 'leetcode_number': number})
+                                 'title_slug': slug, 'external_id': meta['external_id']})
 
-        # Persist username, profile snapshot, calendar, and watermark.
-        db.set_setting(_pkey(LEETCODE, 'username'), username)
-        db.set_setting(_pkey(LEETCODE, 'profile'), json.dumps(profile))
-        db.set_setting(_pkey(LEETCODE, 'calendar'), json.dumps(profile['submissionCalendar']))
-        db.set_setting(_pkey(LEETCODE, 'last_sync_ts'), str(max_ts))
-        db.set_setting(_pkey(LEETCODE, 'last_sync_at'), datetime.now().isoformat())
+        db.set_setting(_pkey(provider, 'username'), username)
+        if profile is not None:
+            db.set_setting(_pkey(provider, 'profile'), json.dumps(profile))
+            db.set_setting(_pkey(provider, 'calendar'),
+                           json.dumps(profile.get('submissionCalendar', {})))
+        db.set_setting(_pkey(provider, 'last_sync_ts'), str(max_ts))
+        db.set_setting(_pkey(provider, 'last_sync_at'), datetime.now().isoformat())
 
         return jsonify({
-            'username': username,
-            'first_sync': first_sync,
-            'new': new_problems,
-            'reps': reps,
-            'new_count': len(new_problems),
-            'rep_count': len(reps),
+            'username': username, 'first_sync': first_sync,
+            'new': new_problems, 'reps': reps,
+            'new_count': len(new_problems), 'rep_count': len(reps),
             'profile': profile,
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 
-# ── API: LeetCode account (v2 — authenticated) ──────────────
-
-@app.route('/api/leetcode/auth')
-def api_leetcode_auth():
-    """Login state — never returns the token itself."""
+def _svc_auth(provider):
     return jsonify({
-        'logged_in': bool(db.get_setting(_pkey(LEETCODE, 'session'))),
-        'username': db.get_setting(_pkey(LEETCODE, 'username')),
+        'logged_in': bool(db.get_setting(_pkey(provider, 'session'))),
+        'username': db.get_setting(_pkey(provider, 'username')),
     })
 
 
-@app.route('/api/leetcode/login', methods=['POST'])
-def api_leetcode_login():
-    """Store + verify a LEETCODE_SESSION (and csrftoken) copied from the browser."""
+def _svc_login(provider):
+    if not provider.auth_fields:
+        return jsonify({'error': f'{provider.name} has no login'}), 400
     body = request.json or {}
-    session = (body.get('session') or '').strip()
-    csrf = (body.get('csrf') or '').strip()
-    if not session:
-        return jsonify({'error': 'LEETCODE_SESSION is required'}), 400
+    creds = {key: (body.get(key) or '').strip() for key, _label in provider.auth_fields}
+    if not creds.get('session'):
+        return jsonify({'error': 'A session token is required'}), 400
     try:
-        username = LEETCODE.verify_auth({'session': session, 'csrf': csrf})
+        username = provider.verify_auth(creds)
         if not username:
             return jsonify({'error': 'Invalid or expired session'}), 401
-        db.set_setting(_pkey(LEETCODE, 'session'), session)
-        db.set_setting(_pkey(LEETCODE, 'csrf'), csrf)
-        db.set_setting(_pkey(LEETCODE, 'username'), username)
+        for key, _label in provider.auth_fields:
+            db.set_setting(_pkey(provider, key), creds.get(key, ''))
+        db.set_setting(_pkey(provider, 'username'), username)
         return jsonify({'logged_in': True, 'username': username})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/leetcode/logout', methods=['POST'])
-def api_leetcode_logout():
-    db.set_setting(_pkey(LEETCODE, 'session'), '')
-    db.set_setting(_pkey(LEETCODE, 'csrf'), '')
+def _svc_logout(provider):
+    for key, _label in provider.auth_fields:
+        db.set_setting(_pkey(provider, key), '')
     return jsonify({'logged_in': False})
 
 
-@app.route('/api/leetcode/backfill', methods=['POST'])
-def api_leetcode_backfill():
-    """Import ONLY the logged-in user's solved problems (status == 'ac').
-
-    A single authenticated request to /api/problems/all/ returns every problem
-    with the user's per-problem status; we keep the solved ones and create a
-    problem row for each that isn't already tracked. Existing rows (matched by
-    slug or number) are never duplicated and their notes/tabs are untouched.
-    """
-    creds = _provider_creds(LEETCODE)
+def _svc_backfill(provider):
+    if not provider.has(AUTH_BACKFILL):
+        return jsonify({'error': f'{provider.name} has no backfill'}), 400
+    creds = _provider_creds(provider)
     if not creds:
         return jsonify({'error': 'Not logged in'}), 401
     try:
-        solved = LEETCODE.list_solved(creds)
+        solved = provider.list_solved(creds) or []
         created, skipped = 0, 0
         for prob in solved:
-            slug = prob['slug']
-            number = int(prob['external_id']) if prob['external_id'] else None
-
-            existing = (db.get_problem_by_slug(slug, LEETCODE.id)
-                        or db.get_problem_by_external(LEETCODE.id, prob['external_id']))
+            slug = prob.get('slug')
+            existing = ((db.get_problem_by_slug(slug, provider.id) if slug else None)
+                        or db.get_problem_by_external(provider.id, prob['external_id']))
             if existing:
-                if not existing.get('title_slug'):
+                if slug and not existing.get('title_slug'):
                     db.update_problem(existing['id'], {'title_slug': slug})
                 skipped += 1
                 continue
 
             db.create_problem({
-                'platform': LEETCODE.id,
+                'platform': provider.id,
                 'external_id': prob['external_id'],
-                'leetcode_number': number,
+                'leetcode_number': _legacy_number(provider, prob['external_id']),
                 'title': prob['title'],
                 'title_slug': slug,
                 'difficulty': prob['difficulty'] or 'medium',
@@ -403,33 +384,177 @@ def api_leetcode_backfill():
 
         # Store the real submission calendar so the activity graph reflects true
         # historical dates instead of piling every import onto today.
-        username = db.get_setting(_pkey(LEETCODE, 'username'))
-        if username:
-            try:
-                profile = LEETCODE.fetch_profile(username)
-                if profile:
-                    db.set_setting(_pkey(LEETCODE, 'profile'), json.dumps(profile))
-                    db.set_setting(_pkey(LEETCODE, 'calendar'), json.dumps(profile['submissionCalendar']))
-            except Exception:
-                pass
+        if provider.has(PUBLIC_PROFILE):
+            username = db.get_setting(_pkey(provider, 'username'))
+            if username:
+                try:
+                    profile = provider.fetch_profile(username)
+                    if profile:
+                        db.set_setting(_pkey(provider, 'profile'), json.dumps(profile))
+                        db.set_setting(_pkey(provider, 'calendar'),
+                                       json.dumps(profile.get('submissionCalendar', {})))
+                except Exception:
+                    pass
 
-        db.set_setting(_pkey(LEETCODE, 'last_backfill_at'), datetime.now().isoformat())
+        db.set_setting(_pkey(provider, 'last_backfill_at'), datetime.now().isoformat())
         return jsonify({'created': created, 'skipped': skipped,
                         'solved_total': created + skipped})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/leetcode/submissions/<slug>')
-def api_leetcode_submissions(slug):
-    """The logged-in user's recent submissions for one problem (on-demand)."""
-    creds = _provider_creds(LEETCODE)
+def _svc_submissions(provider, slug):
+    if not provider.has(SUBMISSION_CODE):
+        return jsonify({'error': f'{provider.name} has no submissions API'}), 400
+    creds = _provider_creds(provider)
     if not creds:
         return jsonify({'error': 'Not logged in'}), 401
     try:
-        return jsonify(LEETCODE.submissions(creds, slug))
+        return jsonify(provider.submissions(creds, slug))
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+def _svc_submission_code(provider, submission_id):
+    if not provider.has(SUBMISSION_CODE):
+        return jsonify({'error': f'{provider.name} has no submissions API'}), 400
+    creds = _provider_creds(provider)
+    if not creds:
+        return jsonify({'error': 'Not logged in'}), 401
+    try:
+        return jsonify(provider.submission_code(creds, submission_id))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+def _legacy_number(provider, external_id):
+    """Keep the legacy leetcode_number column populated for LeetCode rows."""
+    if provider.id == 'leetcode' and (external_id or '').isdigit():
+        return int(external_id)
+    return None
+
+
+# ── API: Providers (generic, platform-parameterized) ────────
+
+@app.route('/api/providers')
+def api_providers():
+    """List registered platforms + capabilities for capability-driven UI."""
+    return jsonify([{
+        'id': p.id,
+        'name': p.name,
+        'base_url': p.base_url,
+        'capabilities': sorted(p.capabilities),
+        'auth_fields': [{'key': k, 'label': l} for k, l in p.auth_fields],
+        'logged_in': bool(db.get_setting(_pkey(p, 'session'))),
+        'username': db.get_setting(_pkey(p, 'username')),
+    } for p in PROVIDERS.values()])
+
+
+@app.route('/api/providers/<platform>/problem/<int:number>')
+def api_provider_problem(platform, number):
+    provider, err = _resolve_provider(platform)
+    return err or _svc_fetch_problem_by_number(provider, number)
+
+
+@app.route('/api/providers/<platform>/profile/<username>')
+def api_provider_profile(platform, username):
+    provider, err = _resolve_provider(platform)
+    return err or _svc_profile(provider, username)
+
+
+@app.route('/api/providers/<platform>/cached')
+def api_provider_cached(platform):
+    provider, err = _resolve_provider(platform)
+    return err or _svc_cached(provider)
+
+
+@app.route('/api/providers/<platform>/sync', methods=['POST'])
+def api_provider_sync(platform):
+    provider, err = _resolve_provider(platform)
+    return err or _svc_sync(provider)
+
+
+@app.route('/api/providers/<platform>/auth')
+def api_provider_auth(platform):
+    provider, err = _resolve_provider(platform)
+    return err or _svc_auth(provider)
+
+
+@app.route('/api/providers/<platform>/login', methods=['POST'])
+def api_provider_login(platform):
+    provider, err = _resolve_provider(platform)
+    return err or _svc_login(provider)
+
+
+@app.route('/api/providers/<platform>/logout', methods=['POST'])
+def api_provider_logout(platform):
+    provider, err = _resolve_provider(platform)
+    return err or _svc_logout(provider)
+
+
+@app.route('/api/providers/<platform>/backfill', methods=['POST'])
+def api_provider_backfill(platform):
+    provider, err = _resolve_provider(platform)
+    return err or _svc_backfill(provider)
+
+
+@app.route('/api/providers/<platform>/submissions/<slug>')
+def api_provider_submissions(platform, slug):
+    provider, err = _resolve_provider(platform)
+    return err or _svc_submissions(provider, slug)
+
+
+@app.route('/api/providers/<platform>/submission/<sid>')
+def api_provider_submission(platform, sid):
+    provider, err = _resolve_provider(platform)
+    return err or _svc_submission_code(provider, sid)
+
+
+# ── API: LeetCode aliases (back-compat; delegate to services) ─
+
+@app.route('/api/leetcode/<int:number>')
+def api_fetch_leetcode(number):
+    return _svc_fetch_problem_by_number(LEETCODE, number)
+
+
+@app.route('/api/leetcode/profile/<username>')
+def api_leetcode_profile(username):
+    return _svc_profile(LEETCODE, username)
+
+
+@app.route('/api/leetcode/cached')
+def api_leetcode_cached():
+    return _svc_cached(LEETCODE)
+
+
+@app.route('/api/leetcode/sync', methods=['POST'])
+def api_leetcode_sync():
+    return _svc_sync(LEETCODE)
+
+
+@app.route('/api/leetcode/auth')
+def api_leetcode_auth():
+    return _svc_auth(LEETCODE)
+
+
+@app.route('/api/leetcode/login', methods=['POST'])
+def api_leetcode_login():
+    return _svc_login(LEETCODE)
+
+
+@app.route('/api/leetcode/logout', methods=['POST'])
+def api_leetcode_logout():
+    return _svc_logout(LEETCODE)
+
+
+@app.route('/api/leetcode/backfill', methods=['POST'])
+def api_leetcode_backfill():
+    return _svc_backfill(LEETCODE)
+
+
+@app.route('/api/leetcode/submissions/<slug>')
+def api_leetcode_submissions(slug):
+    return _svc_submissions(LEETCODE, slug)
 
 
 @app.route('/api/problems/<int:pid>/enrich', methods=['POST'])
@@ -467,14 +592,7 @@ def api_enrich_problem(pid):
 
 @app.route('/api/leetcode/submission/<int:sid>')
 def api_leetcode_submission_code(sid):
-    """The actual submitted code for one submission (on-demand)."""
-    creds = _provider_creds(LEETCODE)
-    if not creds:
-        return jsonify({'error': 'Not logged in'}), 401
-    try:
-        return jsonify(LEETCODE.submission_code(creds, sid))
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    return _svc_submission_code(LEETCODE, sid)
 
 
 # ── API: Settings ────────────────────────────────────────────
