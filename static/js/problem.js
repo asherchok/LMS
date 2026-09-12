@@ -894,8 +894,6 @@ async function importLeetCodeCode() {
         setStatus('No LeetCode slug on this problem — set the LeetCode # and re-fetch first.', 'var(--hard)');
         return;
     }
-    const tab = tabs.find(t => t.id === activeTabId);
-    if (!tab) return;
     setStatus('Fetching your submissions from LeetCode…');
     try {
         const listResp = await fetch(`/api/leetcode/submissions/${PROBLEM_SLUG}`);
@@ -912,14 +910,29 @@ async function importLeetCodeCode() {
         const when = accepted.timestamp
             ? new Date(accepted.timestamp * 1000).toLocaleDateString() : '';
         const lang = (detail.lang && detail.lang.name) || accepted.lang;
-        tab.content.push({type: 'markdown',
-            content: `**Imported from LeetCode** — ${accepted.statusDisplay || 'Accepted'}`
-                + `${when ? ' · ' + when : ''}`
-                + `${accepted.runtime ? ' · ' + accepted.runtime : ''}`
-                + `${accepted.memory ? ' · ' + accepted.memory : ''}`});
-        tab.content.push({type: 'code', language: mapLcLang(lang), content: detail.code});
-        renderBlocks(tab.content);
-        scheduleSave();
+        const blocks = [
+            {type: 'markdown',
+             content: `**Imported from LeetCode** — ${accepted.statusDisplay || 'Accepted'}`
+                 + `${when ? ' · ' + when : ''}`
+                 + `${accepted.runtime ? ' · ' + accepted.runtime : ''}`
+                 + `${accepted.memory ? ' · ' + accepted.memory : ''}`},
+            {type: 'code', language: mapLcLang(lang), content: detail.code},
+        ];
+
+        // Land the import in its OWN new tab so existing notes are never
+        // touched, even if this problem already had approaches.
+        saveCurrentTab();
+        const tabResp = await fetch(`/api/problems/${PROBLEM_ID}/tabs`, {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({title: when ? `LeetCode · ${when}` : 'LeetCode Submission'}),
+        });
+        const newTab = await tabResp.json();
+        await fetch(`/api/tabs/${newTab.id}`, {
+            method: 'PUT', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({content: blocks}),
+        });
+        await loadTabs();
+        switchTab(newTab.id);
 
         // Activate the problem on its real solve date (clears the imported flag
         // so it now shows on the calendar on the day it was actually solved).
@@ -930,7 +943,7 @@ async function importLeetCodeCode() {
                 body: JSON.stringify({created_at: solvedIso, imported: 0}),
             });
         }
-        setStatus('Imported your accepted submission.', 'var(--success)');
+        setStatus('Imported into a new tab.', 'var(--success)');
     } catch {
         setStatus('Failed to reach LeetCode.', 'var(--hard)');
     }
