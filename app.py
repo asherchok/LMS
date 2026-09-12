@@ -5,6 +5,7 @@ import re
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from models import Database
+from providers import get_provider, sensitive_setting_keys
 
 app = Flask(__name__)
 VERSION = '1.4.0'
@@ -166,129 +167,19 @@ def api_contributions():
     return jsonify(activity)
 
 
-# ── LeetCode GraphQL helpers ────────────────────────────────
+# ── LeetCode integration (via provider abstraction) ─────────
 
-LEETCODE_GRAPHQL = 'https://leetcode.com/graphql'
-LEETCODE_HEADERS = {
-    'Content-Type': 'application/json',
-    'Referer': 'https://leetcode.com',
-    'User-Agent': 'Mozilla/5.0',
-}
-
-_Q_PROFILE = """
-query userProfile($username: String!) {
-  matchedUser(username: $username) {
-    username
-    profile { realName ranking reputation }
-    submitStatsGlobal { acSubmissionNum { difficulty count } }
-    userCalendar { streak totalActiveDays submissionCalendar }
-  }
-}"""
-
-_Q_RECENT = """
-query recentAc($username: String!, $limit: Int!) {
-  recentAcSubmissionList(username: $username, limit: $limit) {
-    title titleSlug timestamp
-  }
-}"""
-
-_Q_QUESTION = """
-query question($slug: String!) {
-  question(titleSlug: $slug) {
-    questionFrontendId title difficulty topicTags { name } content
-  }
-}"""
-
-_Q_USERSTATUS = "query { userStatus { username isSignedIn } }"
-
-_Q_SUBLIST = """
-query submissions($slug: String!, $offset: Int!, $limit: Int!) {
-  submissionList(questionSlug: $slug, offset: $offset, limit: $limit) {
-    hasNext
-    submissions { id statusDisplay lang timestamp runtime memory }
-  }
-}"""
-
-_Q_SUBDETAIL = """
-query submissionDetails($id: Int!) {
-  submissionDetails(submissionId: $id) {
-    code lang { name } runtime memory timestamp
-  }
-}"""
-
-# LeetCode difficulty level (from /api/problems/all/) → our difficulty label
-_LC_DIFFICULTY = {1: 'easy', 2: 'medium', 3: 'hard'}
+LEETCODE = get_provider('leetcode')
 
 # Credential keys are stored in settings but must never be echoed to the client.
-_SENSITIVE_SETTINGS = {'leetcode_session', 'leetcode_csrf'}
+_SENSITIVE_SETTINGS = sensitive_setting_keys()
 
 
-def _lc_post(query, variables):
-    import requests as http
-    resp = http.post(
-        LEETCODE_GRAPHQL,
-        json={'query': query, 'variables': variables},
-        headers=LEETCODE_HEADERS,
-        timeout=15,
-    )
-    return resp.json()
-
-
-def _lc_cookie_headers(session, csrf):
-    """Build request headers carrying the LeetCode session cookie."""
-    cookie = f'LEETCODE_SESSION={session}'
-    headers = dict(LEETCODE_HEADERS)
-    if csrf:
-        cookie += f'; csrftoken={csrf}'
-        headers['x-csrftoken'] = csrf
-    headers['Cookie'] = cookie
-    return headers
-
-
-def _lc_auth_headers():
-    """Headers for the logged-in user, or None if no session is stored."""
-    session = db.get_setting('leetcode_session')
-    if not session:
-        return None
-    return _lc_cookie_headers(session, db.get_setting('leetcode_csrf'))
-
-
-def _lc_post_auth(query, variables):
-    import requests as http
-    headers = _lc_auth_headers()
-    resp = http.post(
-        LEETCODE_GRAPHQL,
-        json={'query': query, 'variables': variables},
-        headers=headers,
-        timeout=20,
-    )
-    return resp.json()
-
-
-def _fetch_profile(username):
-    """Public profile snapshot: solved counts, ranking, streak, calendar."""
-    data = _lc_post(_Q_PROFILE, {'username': username})
-    mu = (data.get('data') or {}).get('matchedUser')
-    if not mu:
-        return None
-    counts = {
-        x['difficulty'].lower(): x['count']
-        for x in (mu.get('submitStatsGlobal') or {}).get('acSubmissionNum', [])
-    }
-    cal = mu.get('userCalendar') or {}
-    try:
-        sub_cal = json.loads(cal.get('submissionCalendar') or '{}')
-    except (ValueError, TypeError):
-        sub_cal = {}
-    return {
-        'username': mu.get('username'),
-        'realName': (mu.get('profile') or {}).get('realName'),
-        'ranking': (mu.get('profile') or {}).get('ranking'),
-        'solved': counts,                     # keys: all, easy, medium, hard
-        'streak': cal.get('streak'),
-        'totalActiveDays': cal.get('totalActiveDays'),
-        'submissionCalendar': sub_cal,        # {unix_day: count}
-    }
+def _provider_creds(provider):
+    """Read a provider's stored credentials from settings, or None if absent."""
+    creds = {key: db.get_setting(f'{provider.id}_{key}')
+             for key, _label in provider.auth_fields}
+    return creds if creds.get('session') else None
 
 
 # ── API: LeetCode fetch ─────────────────────────────────────
@@ -296,34 +187,17 @@ def _fetch_profile(username):
 @app.route('/api/leetcode/<int:number>')
 def api_fetch_leetcode(number):
     try:
-        import requests as http
-        resp = http.post(
-            'https://leetcode.com/graphql',
-            json={
-                'query': """query($categorySlug:String,$limit:Int,$skip:Int,$filters:QuestionListFilterInput){
-                    problemsetQuestionList:questionList(categorySlug:$categorySlug,limit:$limit,skip:$skip,filters:$filters){
-                        questions:data{frontendQuestionId:questionFrontendId title titleSlug difficulty topicTags{name} content}
-                    }}""",
-                'variables': {
-                    'categorySlug': '', 'limit': 50, 'skip': 0,
-                    'filters': {'searchKeywords': str(number)},
-                },
-            },
-            headers={'Content-Type': 'application/json', 'Referer': 'https://leetcode.com'},
-            timeout=10,
-        )
-        questions = resp.json().get('data', {}).get('problemsetQuestionList', {}).get('questions', [])
-        for q in questions:
-            if q['frontendQuestionId'] == str(number):
-                return jsonify({
-                    'leetcode_number': number,
-                    'title': q['title'],
-                    'description': q.get('content', ''),
-                    'difficulty': q['difficulty'].lower(),
-                    'tags': [t['name'] for t in q.get('topicTags', [])],
-                    'source_url': f"https://leetcode.com/problems/{q['titleSlug']}/",
-                })
-        return jsonify({'error': 'Problem not found'}), 404
+        prob = LEETCODE.fetch_problem_by_number(number)
+        if not prob:
+            return jsonify({'error': 'Problem not found'}), 404
+        return jsonify({
+            'leetcode_number': int(prob['external_id']),
+            'title': prob['title'],
+            'description': prob['description'],
+            'difficulty': prob['difficulty'],
+            'tags': prob['tags'],
+            'source_url': prob['url'],
+        })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -332,7 +206,7 @@ def api_fetch_leetcode(number):
 def api_leetcode_profile(username):
     """Live public profile fetch (stats + submission calendar) by username."""
     try:
-        profile = _fetch_profile(username)
+        profile = LEETCODE.fetch_profile(username)
         if not profile:
             return jsonify({'error': 'User not found'}), 404
         return jsonify(profile)
@@ -364,12 +238,11 @@ def api_leetcode_sync():
         return jsonify({'error': 'No username provided'}), 400
 
     try:
-        profile = _fetch_profile(username)
+        profile = LEETCODE.fetch_profile(username)
         if not profile:
             return jsonify({'error': 'User not found'}), 404
 
-        data = _lc_post(_Q_RECENT, {'username': username, 'limit': 20})
-        subs = (data.get('data') or {}).get('recentAcSubmissionList') or []
+        subs = LEETCODE.recent_submissions(username, 20)
 
         last_ts = int(db.get_setting('leetcode_last_sync_ts', '0') or '0')
         first_sync = last_ts == 0
@@ -377,12 +250,12 @@ def api_leetcode_sync():
         new_problems, reps = [], []
 
         # Oldest first so a first-solve is created before a same-batch rep.
-        for s in sorted(subs, key=lambda x: int(x['timestamp'])):
-            ts = int(s['timestamp'])
+        for s in sorted(subs, key=lambda x: x['timestamp']):
+            ts = s['timestamp']
             if ts <= last_ts:
                 continue
             max_ts = max(max_ts, ts)
-            slug = s['titleSlug']
+            slug = s['slug']
             solved_iso = datetime.fromtimestamp(ts).isoformat()
             day = solved_iso[:10]
 
@@ -394,10 +267,10 @@ def api_leetcode_sync():
                 continue
 
             # Unknown slug — fetch full metadata (needed to create anyway).
-            meta = (_lc_post(_Q_QUESTION, {'slug': slug}).get('data') or {}).get('question')
+            meta = LEETCODE.fetch_problem(slug)
             if not meta:
                 continue
-            number = int(meta['questionFrontendId'])
+            number = int(meta['external_id'])
 
             # Guard: a pre-existing problem (e.g. created before slugs existed,
             # possibly with notes) tracked by number — backfill slug + log rep,
@@ -414,10 +287,10 @@ def api_leetcode_sync():
                 'leetcode_number': number,
                 'title': meta['title'],
                 'title_slug': slug,
-                'difficulty': meta['difficulty'].lower(),
-                'description': meta.get('content') or '',
-                'tags': [t['name'] for t in meta.get('topicTags', [])],
-                'source_url': f'https://leetcode.com/problems/{slug}/',
+                'difficulty': meta['difficulty'] or 'medium',
+                'description': meta['description'],
+                'tags': meta['tags'],
+                'source_url': meta['url'],
                 'created_at': solved_iso,
             })
             new_problems.append({'id': pid, 'title': meta['title'],
@@ -463,21 +336,13 @@ def api_leetcode_login():
     if not session:
         return jsonify({'error': 'LEETCODE_SESSION is required'}), 400
     try:
-        import requests as http
-        resp = http.post(
-            LEETCODE_GRAPHQL,
-            json={'query': _Q_USERSTATUS, 'variables': {}},
-            headers=_lc_cookie_headers(session, csrf),
-            timeout=15,
-        )
-        status = (resp.json().get('data') or {}).get('userStatus') or {}
-        if not status.get('isSignedIn'):
+        username = LEETCODE.verify_auth({'session': session, 'csrf': csrf})
+        if not username:
             return jsonify({'error': 'Invalid or expired session'}), 401
         db.set_setting('leetcode_session', session)
         db.set_setting('leetcode_csrf', csrf)
-        if status.get('username'):
-            db.set_setting('leetcode_username', status['username'])
-        return jsonify({'logged_in': True, 'username': status.get('username')})
+        db.set_setting('leetcode_username', username)
+        return jsonify({'logged_in': True, 'username': username})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -498,23 +363,15 @@ def api_leetcode_backfill():
     problem row for each that isn't already tracked. Existing rows (matched by
     slug or number) are never duplicated and their notes/tabs are untouched.
     """
-    headers = _lc_auth_headers()
-    if not headers:
+    creds = _provider_creds(LEETCODE)
+    if not creds:
         return jsonify({'error': 'Not logged in'}), 401
     try:
-        import requests as http
-        resp = http.get('https://leetcode.com/api/problems/all/', headers=headers, timeout=30)
-        pairs = resp.json().get('stat_status_pairs', [])
+        solved = LEETCODE.list_solved(creds)
         created, skipped = 0, 0
-        for p in pairs:
-            if p.get('status') != 'ac':          # solved only
-                continue
-            stat = p['stat']
-            slug = stat['question__title_slug']
-            try:
-                number = int(stat['frontend_question_id'])
-            except (TypeError, ValueError):
-                number = None
+        for prob in solved:
+            slug = prob['slug']
+            number = int(prob['external_id']) if prob['external_id'] else None
 
             existing = db.get_problem_by_slug(slug) or db.get_problem_by_number(number)
             if existing:
@@ -525,10 +382,10 @@ def api_leetcode_backfill():
 
             db.create_problem({
                 'leetcode_number': number,
-                'title': stat['question__title'],
+                'title': prob['title'],
                 'title_slug': slug,
-                'difficulty': _LC_DIFFICULTY.get((p.get('difficulty') or {}).get('level'), 'medium'),
-                'source_url': f'https://leetcode.com/problems/{slug}/',
+                'difficulty': prob['difficulty'] or 'medium',
+                'source_url': prob['url'],
                 'tags': [],
                 'imported': True,          # unknown solve date — kept off the calendar
             })
@@ -539,7 +396,7 @@ def api_leetcode_backfill():
         username = db.get_setting('leetcode_username')
         if username:
             try:
-                profile = _fetch_profile(username)
+                profile = LEETCODE.fetch_profile(username)
                 if profile:
                     db.set_setting('leetcode_profile', json.dumps(profile))
                     db.set_setting('leetcode_calendar', json.dumps(profile['submissionCalendar']))
@@ -556,12 +413,11 @@ def api_leetcode_backfill():
 @app.route('/api/leetcode/submissions/<slug>')
 def api_leetcode_submissions(slug):
     """The logged-in user's recent submissions for one problem (on-demand)."""
-    if not _lc_auth_headers():
+    creds = _provider_creds(LEETCODE)
+    if not creds:
         return jsonify({'error': 'Not logged in'}), 401
     try:
-        data = _lc_post_auth(_Q_SUBLIST, {'slug': slug, 'offset': 0, 'limit': 20})
-        return jsonify((data.get('data') or {}).get('submissionList') or
-                       {'hasNext': False, 'submissions': []})
+        return jsonify(LEETCODE.submissions(creds, slug))
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -582,15 +438,14 @@ def api_enrich_problem(pid):
     if (p.get('description') or '').strip():
         return jsonify({'enriched': False, 'reason': 'already_filled', 'problem': p})
     try:
-        q = (_lc_post(_Q_QUESTION, {'slug': slug}).get('data') or {}).get('question')
-        if not q:
+        meta = LEETCODE.fetch_problem(slug)
+        if not meta:
             return jsonify({'enriched': False, 'reason': 'not_found', 'problem': p})
-        updates = {'description': q.get('content') or ''}
-        tags = [t['name'] for t in q.get('topicTags', [])]
-        if tags and not p.get('tags'):
-            updates['tags'] = tags
-        if q.get('difficulty'):
-            updates['difficulty'] = q['difficulty'].lower()
+        updates = {'description': meta['description']}
+        if meta['tags'] and not p.get('tags'):
+            updates['tags'] = meta['tags']
+        if meta['difficulty']:
+            updates['difficulty'] = meta['difficulty']
         db.update_problem(pid, updates)
         return jsonify({'enriched': True, 'problem': db.get_problem(pid)})
     except Exception as e:
@@ -600,11 +455,11 @@ def api_enrich_problem(pid):
 @app.route('/api/leetcode/submission/<int:sid>')
 def api_leetcode_submission_code(sid):
     """The actual submitted code for one submission (on-demand)."""
-    if not _lc_auth_headers():
+    creds = _provider_creds(LEETCODE)
+    if not creds:
         return jsonify({'error': 'Not logged in'}), 401
     try:
-        data = _lc_post_auth(_Q_SUBDETAIL, {'id': sid})
-        return jsonify((data.get('data') or {}).get('submissionDetails') or {})
+        return jsonify(LEETCODE.submission_code(creds, sid))
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
