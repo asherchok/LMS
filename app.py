@@ -156,7 +156,7 @@ def api_contributions():
     # Overlay LeetCode's public submission calendar (full-year daily counts).
     # Use max per day so synced problems (already counted locally on their solve
     # date) aren't double-counted, while historical LeetCode-only days fill in.
-    raw = db.get_setting('leetcode_calendar')
+    raw = db.get_setting(f'{LEETCODE.id}_calendar')
     if raw:
         try:
             for ts, cnt in json.loads(raw).items():
@@ -175,9 +175,14 @@ LEETCODE = get_provider('leetcode')
 _SENSITIVE_SETTINGS = sensitive_setting_keys()
 
 
+def _pkey(provider, name):
+    """Provider-namespaced settings key, e.g. leetcode_username."""
+    return f'{provider.id}_{name}'
+
+
 def _provider_creds(provider):
     """Read a provider's stored credentials from settings, or None if absent."""
-    creds = {key: db.get_setting(f'{provider.id}_{key}')
+    creds = {key: db.get_setting(_pkey(provider, key))
              for key, _label in provider.auth_fields}
     return creds if creds.get('session') else None
 
@@ -217,7 +222,7 @@ def api_leetcode_profile(username):
 @app.route('/api/leetcode/cached')
 def api_leetcode_cached():
     """Last-synced profile snapshot stored locally (empty dict if none)."""
-    raw = db.get_setting('leetcode_profile')
+    raw = db.get_setting(_pkey(LEETCODE, 'profile'))
     return jsonify(json.loads(raw) if raw else {})
 
 
@@ -233,7 +238,7 @@ def api_leetcode_sync():
     notes/tabs are never touched.
     """
     body = request.json or {}
-    username = (body.get('username') or db.get_setting('leetcode_username') or '').strip()
+    username = (body.get('username') or db.get_setting(_pkey(LEETCODE, 'username')) or '').strip()
     if not username:
         return jsonify({'error': 'No username provided'}), 400
 
@@ -244,7 +249,7 @@ def api_leetcode_sync():
 
         subs = LEETCODE.recent_submissions(username, 20)
 
-        last_ts = int(db.get_setting('leetcode_last_sync_ts', '0') or '0')
+        last_ts = int(db.get_setting(_pkey(LEETCODE, 'last_sync_ts'), '0') or '0')
         first_sync = last_ts == 0
         max_ts = last_ts
         new_problems, reps = [], []
@@ -259,7 +264,7 @@ def api_leetcode_sync():
             solved_iso = datetime.fromtimestamp(ts).isoformat()
             day = solved_iso[:10]
 
-            existing = db.get_problem_by_slug(slug)
+            existing = db.get_problem_by_slug(slug, LEETCODE.id)
             if existing:
                 db.add_revision(existing['id'], revised_at=day)
                 reps.append({'id': existing['id'], 'title': existing['title'],
@@ -273,17 +278,19 @@ def api_leetcode_sync():
             number = int(meta['external_id'])
 
             # Guard: a pre-existing problem (e.g. created before slugs existed,
-            # possibly with notes) tracked by number — backfill slug + log rep,
-            # don't create a duplicate.
-            by_num = db.get_problem_by_number(number)
-            if by_num:
-                db.update_problem(by_num['id'], {'title_slug': slug})
-                db.add_revision(by_num['id'], revised_at=day)
-                reps.append({'id': by_num['id'], 'title': by_num['title'],
+            # possibly with notes) tracked by external id — backfill slug + log
+            # rep, don't create a duplicate.
+            by_ext = db.get_problem_by_external(LEETCODE.id, meta['external_id'])
+            if by_ext:
+                db.update_problem(by_ext['id'], {'title_slug': slug})
+                db.add_revision(by_ext['id'], revised_at=day)
+                reps.append({'id': by_ext['id'], 'title': by_ext['title'],
                              'title_slug': slug})
                 continue
 
             pid = db.create_problem({
+                'platform': LEETCODE.id,
+                'external_id': meta['external_id'],
                 'leetcode_number': number,
                 'title': meta['title'],
                 'title_slug': slug,
@@ -297,11 +304,11 @@ def api_leetcode_sync():
                                  'title_slug': slug, 'leetcode_number': number})
 
         # Persist username, profile snapshot, calendar, and watermark.
-        db.set_setting('leetcode_username', username)
-        db.set_setting('leetcode_profile', json.dumps(profile))
-        db.set_setting('leetcode_calendar', json.dumps(profile['submissionCalendar']))
-        db.set_setting('leetcode_last_sync_ts', str(max_ts))
-        db.set_setting('leetcode_last_sync_at', datetime.now().isoformat())
+        db.set_setting(_pkey(LEETCODE, 'username'), username)
+        db.set_setting(_pkey(LEETCODE, 'profile'), json.dumps(profile))
+        db.set_setting(_pkey(LEETCODE, 'calendar'), json.dumps(profile['submissionCalendar']))
+        db.set_setting(_pkey(LEETCODE, 'last_sync_ts'), str(max_ts))
+        db.set_setting(_pkey(LEETCODE, 'last_sync_at'), datetime.now().isoformat())
 
         return jsonify({
             'username': username,
@@ -322,8 +329,8 @@ def api_leetcode_sync():
 def api_leetcode_auth():
     """Login state — never returns the token itself."""
     return jsonify({
-        'logged_in': bool(db.get_setting('leetcode_session')),
-        'username': db.get_setting('leetcode_username'),
+        'logged_in': bool(db.get_setting(_pkey(LEETCODE, 'session'))),
+        'username': db.get_setting(_pkey(LEETCODE, 'username')),
     })
 
 
@@ -339,9 +346,9 @@ def api_leetcode_login():
         username = LEETCODE.verify_auth({'session': session, 'csrf': csrf})
         if not username:
             return jsonify({'error': 'Invalid or expired session'}), 401
-        db.set_setting('leetcode_session', session)
-        db.set_setting('leetcode_csrf', csrf)
-        db.set_setting('leetcode_username', username)
+        db.set_setting(_pkey(LEETCODE, 'session'), session)
+        db.set_setting(_pkey(LEETCODE, 'csrf'), csrf)
+        db.set_setting(_pkey(LEETCODE, 'username'), username)
         return jsonify({'logged_in': True, 'username': username})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -349,8 +356,8 @@ def api_leetcode_login():
 
 @app.route('/api/leetcode/logout', methods=['POST'])
 def api_leetcode_logout():
-    db.set_setting('leetcode_session', '')
-    db.set_setting('leetcode_csrf', '')
+    db.set_setting(_pkey(LEETCODE, 'session'), '')
+    db.set_setting(_pkey(LEETCODE, 'csrf'), '')
     return jsonify({'logged_in': False})
 
 
@@ -373,7 +380,8 @@ def api_leetcode_backfill():
             slug = prob['slug']
             number = int(prob['external_id']) if prob['external_id'] else None
 
-            existing = db.get_problem_by_slug(slug) or db.get_problem_by_number(number)
+            existing = (db.get_problem_by_slug(slug, LEETCODE.id)
+                        or db.get_problem_by_external(LEETCODE.id, prob['external_id']))
             if existing:
                 if not existing.get('title_slug'):
                     db.update_problem(existing['id'], {'title_slug': slug})
@@ -381,6 +389,8 @@ def api_leetcode_backfill():
                 continue
 
             db.create_problem({
+                'platform': LEETCODE.id,
+                'external_id': prob['external_id'],
                 'leetcode_number': number,
                 'title': prob['title'],
                 'title_slug': slug,
@@ -393,17 +403,17 @@ def api_leetcode_backfill():
 
         # Store the real submission calendar so the activity graph reflects true
         # historical dates instead of piling every import onto today.
-        username = db.get_setting('leetcode_username')
+        username = db.get_setting(_pkey(LEETCODE, 'username'))
         if username:
             try:
                 profile = LEETCODE.fetch_profile(username)
                 if profile:
-                    db.set_setting('leetcode_profile', json.dumps(profile))
-                    db.set_setting('leetcode_calendar', json.dumps(profile['submissionCalendar']))
+                    db.set_setting(_pkey(LEETCODE, 'profile'), json.dumps(profile))
+                    db.set_setting(_pkey(LEETCODE, 'calendar'), json.dumps(profile['submissionCalendar']))
             except Exception:
                 pass
 
-        db.set_setting('leetcode_last_backfill_at', datetime.now().isoformat())
+        db.set_setting(_pkey(LEETCODE, 'last_backfill_at'), datetime.now().isoformat())
         return jsonify({'created': created, 'skipped': skipped,
                         'solved_total': created + skipped})
     except Exception as e:
@@ -437,8 +447,11 @@ def api_enrich_problem(pid):
         return jsonify({'enriched': False, 'reason': 'no_slug', 'problem': p})
     if (p.get('description') or '').strip():
         return jsonify({'enriched': False, 'reason': 'already_filled', 'problem': p})
+    provider = get_provider(p.get('platform') or 'leetcode')
+    if not provider:
+        return jsonify({'enriched': False, 'reason': 'no_provider', 'problem': p})
     try:
-        meta = LEETCODE.fetch_problem(slug)
+        meta = provider.fetch_problem(slug)
         if not meta:
             return jsonify({'enriched': False, 'reason': 'not_found', 'problem': p})
         updates = {'description': meta['description']}
