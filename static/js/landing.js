@@ -406,7 +406,8 @@ async function loadAuthState() {
 
 async function leetcodeLogin() {
     const session = document.getElementById('lcSessionInput').value.trim();
-    const csrf = document.getElementById('lcCsrfInput').value.trim();
+    const csrfEl = document.getElementById('lcCsrfInput');   // optional, may be hidden
+    const csrf = csrfEl ? csrfEl.value.trim() : '';
     const status = document.getElementById('lcAuthStatus');
     if (!session) { status.textContent = 'Paste your LEETCODE_SESSION cookie.'; status.style.color = 'var(--hard)'; return; }
     status.textContent = 'Verifying…'; status.style.color = 'var(--text-muted)';
@@ -418,7 +419,7 @@ async function leetcodeLogin() {
         const data = await resp.json();
         if (!resp.ok) { status.textContent = data.error || 'Login failed'; status.style.color = 'var(--hard)'; return; }
         document.getElementById('lcSessionInput').value = '';
-        document.getElementById('lcCsrfInput').value = '';
+        if (csrfEl) csrfEl.value = '';
         status.textContent = `Logged in as ${data.username}. Click "Import solved problems".`;
         status.style.color = 'var(--success)';
         await loadAuthState();
@@ -457,13 +458,14 @@ async function showSettings() {
     const settings = await resp.json();
     const langSel = document.getElementById('settingDefaultLang');
     langSel.value = settings.default_language || 'python';
-    document.getElementById('lcUsernameInput').value = settings.leetcode_username || '';
+    // v1 username sync UI is hidden; guard in case those elements are absent.
+    const lcUser = document.getElementById('lcUsernameInput');
+    if (lcUser) lcUser.value = settings.leetcode_username || '';
     const lcStatus = document.getElementById('lcSyncStatus');
-    if (settings.leetcode_last_sync_at) {
-        lcStatus.textContent = 'Last synced: ' + new Date(settings.leetcode_last_sync_at).toLocaleString();
+    if (lcStatus) {
+        lcStatus.textContent = settings.leetcode_last_sync_at
+            ? 'Last synced: ' + new Date(settings.leetcode_last_sync_at).toLocaleString() : '';
         lcStatus.style.color = 'var(--text-muted)';
-    } else {
-        lcStatus.textContent = '';
     }
 
     const cfgResp = await fetch('/api/config');
