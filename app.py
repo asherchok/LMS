@@ -9,7 +9,7 @@ from providers import (get_provider, sensitive_setting_keys, PROVIDERS,
                        PUBLIC_PROFILE, PUBLIC_RECENT, AUTH_BACKFILL, SUBMISSION_CODE)
 
 app = Flask(__name__)
-VERSION = '1.4.0'
+VERSION = '1.5.0'
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE, 'config.json')
