@@ -476,6 +476,58 @@ a:hover { color: var(--accent-hover); }
 .stat-count.medium { color: var(--medium); }
 .stat-count.hard { color: var(--hard); }
 
+/* ── LeetCode cookie guide ─────────────────────────────── */
+
+.lc-guide {
+    margin-bottom: 8px;
+    border: 1.5px solid var(--border-light);
+    border-radius: 6px;
+    background: var(--bg-card);
+    padding: 6px 10px;
+}
+.lc-guide summary {
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    list-style: none;
+}
+.lc-guide summary::-webkit-details-marker { display: none; }
+.lc-guide summary::before { content: '▸ '; color: var(--text-muted); }
+.lc-guide[open] summary::before { content: '▾ '; }
+.lc-guide[open] summary { margin-bottom: 6px; }
+.lc-guide ol {
+    margin: 0;
+    padding-left: 16px;
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--text-secondary);
+}
+.lc-guide li { margin-bottom: 2px; }
+.lc-guide code {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    background: var(--bg-card-hover);
+    border: 1px solid var(--border-light);
+    border-radius: 3px;
+    padding: 0 4px;
+}
+.lc-guide kbd {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    background: var(--bg-card-hover);
+    border: 1px solid var(--ink);
+    border-radius: 3px;
+    padding: 0 5px;
+}
+.lc-guide a { color: var(--medium); }
+.lc-guide-note {
+    font-size: 10.5px;
+    line-height: 1.4;
+    color: var(--text-muted);
+    margin-top: 6px;
+}
+
 /* ── LeetCode panel ────────────────────────────────────── */
 
 .lc-panel {

@@ -166,11 +166,21 @@
         <div class="setting-row">
             <div style="flex:1">
                 <div class="setting-label">LeetCode Account <span id="lcAuthState" style="font-weight:400;color:var(--text-muted)"></span></div>
-                <div class="setting-desc">Log in with your browser session to import <b>all</b> your solved problems (stored locally).</div>
+                <div class="setting-desc">Import <b>all</b> your solved problems. Stored locally.</div>
                 <div id="lcLoginForm" style="margin-top:6px">
-                    <input type="password" class="form-input" id="lcSessionInput" placeholder="LEETCODE_SESSION cookie"
+                    <details class="lc-guide">
+                        <summary>Where do I find these?</summary>
+                        <ol>
+                            <li>Log in to <a href="https://leetcode.com" target="_blank" rel="noopener">leetcode.com</a> in this browser.</li>
+                            <li>Open DevTools → <b>Application</b> tab (<b>Storage</b> in Firefox).</li>
+                            <li><b>Cookies</b> → <code>leetcode.com</code>.</li>
+                            <li>Copy the <code>LEETCODE_SESSION</code> value → paste below.</li>
+                        </ol>
+                        <div class="lc-guide-note">🔒 Treat it like a password. Re-paste if login expires.</div>
+                    </details>
+                    <input type="password" class="form-input" id="lcSessionInput" placeholder="Paste LEETCODE_SESSION value here"
                            style="font-size:12px;padding:5px 8px;font-family:var(--font-mono);width:100%;margin-bottom:5px" autocomplete="off">
-                    <input type="password" class="form-input" id="lcCsrfInput" placeholder="csrftoken cookie (optional)"
+                    <input type="password" class="form-input" id="lcCsrfInput" placeholder="csrftoken value (optional)"
                            style="font-size:12px;padding:5px 8px;font-family:var(--font-mono);width:100%;margin-bottom:6px" autocomplete="off">
                     <button class="btn btn-sm btn-primary" onclick="leetcodeLogin()">Verify &amp; Log in</button>
                 </div>
