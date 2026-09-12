@@ -86,7 +86,49 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     initImageDrop();
     initVideoDrop();
+    lazyEnrichDescription();
 });
+
+// ── Lazy description sync ─────────────────────────────────
+// Imported problems have no description until opened. Fetch it from LeetCode
+// (public) on first view so the page becomes a proper problem environment.
+
+async function lazyEnrichDescription() {
+    const el = document.getElementById('probDescription');
+    if (!el || !PROBLEM_SLUG) return;
+    if (el.textContent.trim()) return;   // already has a description
+    el.innerHTML = '<span style="color:var(--text-muted);font-size:13px">Loading problem from LeetCode…</span>';
+    try {
+        const resp = await fetch(`/api/problems/${PROBLEM_ID}/enrich`, {method: 'POST'});
+        const data = await resp.json();
+        if (data.enriched && data.problem) {
+            el.innerHTML = data.problem.description || '';
+            if (typeof renderMathInElement !== 'undefined') {
+                try {
+                    renderMathInElement(el, {
+                        delimiters: [
+                            {left: '$$', right: '$$', display: true},
+                            {left: '$', right: '$', display: false},
+                        ],
+                        throwOnError: false,
+                    });
+                } catch {}
+            }
+            renderProblemTags(data.problem.tags || []);
+        } else {
+            el.innerHTML = '';
+        }
+    } catch {
+        el.innerHTML = '';
+    }
+}
+
+function renderProblemTags(tags) {
+    const wrap = document.getElementById('probTags');
+    if (!wrap || !tags.length) return;
+    if (wrap.querySelector('.prob-tag')) return;   // don't duplicate
+    wrap.innerHTML = tags.map(t => `<span class="prob-tag">${t}</span>`).join('');
+}
 
 // ── Resizable split ───────────────────────────────────────
 
@@ -844,5 +886,83 @@ async function uploadVideoFile(file) {
         closeVideoModal();
     } else {
         status.textContent = 'Upload failed';
+    }
+}
+
+// ── LeetCode: import my accepted submission (on-demand) ────
+
+// Map LeetCode language slugs to this editor's language values.
+const LC_LANG_MAP = {
+    python: 'python', python3: 'python', pythondata: 'python',
+    golang: 'go', bash: 'shell',
+    mysql: 'sql', mssql: 'sql', oraclesql: 'sql',
+};
+
+function mapLcLang(lc) {
+    if (!lc) return defaultLanguage;
+    const known = ['python','cpp','javascript','typescript','java','c','csharp','go',
+                   'rust','ruby','swift','kotlin','scala','sql','shell'];
+    return LC_LANG_MAP[lc] || (known.includes(lc) ? lc : 'plaintext');
+}
+
+async function importLeetCodeCode() {
+    const status = document.getElementById('lcImportStatus');
+    const setStatus = (m, c) => { status.textContent = m; status.style.color = c || 'var(--text-muted)'; };
+    if (!PROBLEM_SLUG) {
+        setStatus('No LeetCode slug on this problem — set the LeetCode # and re-fetch first.', 'var(--hard)');
+        return;
+    }
+    setStatus('Fetching your submissions from LeetCode…');
+    try {
+        const listResp = await fetch(`/api/leetcode/submissions/${PROBLEM_SLUG}`);
+        if (listResp.status === 401) { setStatus('Log in to LeetCode from the home page Settings first.', 'var(--hard)'); return; }
+        const list = await listResp.json();
+        const subs = list.submissions || [];
+        const accepted = subs.find(s => s.statusDisplay === 'Accepted') || subs[0];
+        if (!accepted) { setStatus('No submissions found for this problem.', 'var(--hard)'); return; }
+
+        const codeResp = await fetch(`/api/leetcode/submission/${accepted.id}`);
+        const detail = await codeResp.json();
+        if (!detail.code) { setStatus('Could not retrieve the submission code.', 'var(--hard)'); return; }
+
+        const when = accepted.timestamp
+            ? new Date(accepted.timestamp * 1000).toLocaleDateString() : '';
+        const lang = (detail.lang && detail.lang.name) || accepted.lang;
+        const blocks = [
+            {type: 'markdown',
+             content: `**Imported from LeetCode** — ${accepted.statusDisplay || 'Accepted'}`
+                 + `${when ? ' · ' + when : ''}`
+                 + `${accepted.runtime ? ' · ' + accepted.runtime : ''}`
+                 + `${accepted.memory ? ' · ' + accepted.memory : ''}`},
+            {type: 'code', language: mapLcLang(lang), content: detail.code},
+        ];
+
+        // Land the import in its OWN new tab so existing notes are never
+        // touched, even if this problem already had approaches.
+        saveCurrentTab();
+        const tabResp = await fetch(`/api/problems/${PROBLEM_ID}/tabs`, {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({title: when ? `LeetCode · ${when}` : 'LeetCode Submission'}),
+        });
+        const newTab = await tabResp.json();
+        await fetch(`/api/tabs/${newTab.id}`, {
+            method: 'PUT', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({content: blocks}),
+        });
+        await loadTabs();
+        switchTab(newTab.id);
+
+        // Activate the problem on its real solve date (clears the imported flag
+        // so it now shows on the calendar on the day it was actually solved).
+        if (accepted.timestamp) {
+            const solvedIso = new Date(accepted.timestamp * 1000).toISOString();
+            fetch(`/api/problems/${PROBLEM_ID}`, {
+                method: 'PUT', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({created_at: solvedIso, imported: 0}),
+            });
+        }
+        setStatus('Imported into a new tab.', 'var(--success)');
+    } catch {
+        setStatus('Failed to reach LeetCode.', 'var(--hard)');
     }
 }

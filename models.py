@@ -63,6 +63,26 @@ class Database:
                     value TEXT NOT NULL
                 );
             """)
+            # Migrations
+            cols = [r['name'] for r in c.execute("PRAGMA table_info(problems)").fetchall()]
+            if 'title_slug' not in cols:
+                c.execute("ALTER TABLE problems ADD COLUMN title_slug TEXT")
+            # `imported` marks bulk-backfilled solved problems whose real solve
+            # date is unknown — they stay off the calendar/activity graph until
+            # engaged with (which sets a real created_at and clears the flag).
+            if 'imported' not in cols:
+                c.execute("ALTER TABLE problems ADD COLUMN imported INTEGER DEFAULT 0")
+            # Multi-platform identity: (platform, external_id) is the canonical
+            # key. Existing rows are LeetCode; backfill external_id from the old
+            # leetcode_number so dedup keeps working across the migration.
+            if 'platform' not in cols:
+                c.execute("ALTER TABLE problems ADD COLUMN platform TEXT DEFAULT 'leetcode'")
+            if 'external_id' not in cols:
+                c.execute("ALTER TABLE problems ADD COLUMN external_id TEXT")
+                c.execute(
+                    "UPDATE problems SET external_id = CAST(leetcode_number AS TEXT) "
+                    "WHERE external_id IS NULL AND leetcode_number IS NOT NULL"
+                )
 
     # --- Settings ---
 
@@ -84,12 +104,21 @@ class Database:
 
     def create_problem(self, data):
         now = datetime.now().isoformat()
+        # created_at may be overridden (e.g. LeetCode solve timestamp on sync)
+        created = data.get('created_at') or now
+        platform = data.get('platform', 'leetcode')
+        # external_id is the canonical per-platform id; derive it from the
+        # legacy leetcode_number when a caller hasn't set it explicitly.
+        external_id = data.get('external_id')
+        if external_id is None and data.get('leetcode_number') is not None:
+            external_id = str(data['leetcode_number'])
         with self._conn() as c:
             cur = c.execute(
                 """INSERT INTO problems
                    (leetcode_number, title, description, difficulty, elo_rating,
-                    source_url, tags, created_at, last_visited_at)
-                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                    source_url, tags, title_slug, imported, platform, external_id,
+                    created_at, last_visited_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     data.get('leetcode_number'),
                     data['title'],
@@ -98,7 +127,11 @@ class Database:
                     data.get('elo_rating'),
                     data.get('source_url'),
                     json.dumps(data.get('tags', [])),
-                    now, now,
+                    data.get('title_slug'),
+                    1 if data.get('imported') else 0,
+                    platform,
+                    external_id,
+                    created, now,
                 ),
             )
             pid = cur.lastrowid
@@ -117,10 +150,48 @@ class Database:
                 return d
         return None
 
+    def _row_to_problem(self, row):
+        if not row:
+            return None
+        d = dict(row)
+        d['tags'] = json.loads(d['tags'])
+        return d
+
+    def get_problem_by_slug(self, slug, platform=None):
+        if not slug:
+            return None
+        q = "SELECT * FROM problems WHERE title_slug=?"
+        params = [slug]
+        if platform is not None:
+            q += " AND platform=?"
+            params.append(platform)
+        with self._conn() as c:
+            return self._row_to_problem(c.execute(q, params).fetchone())
+
+    def get_problem_by_external(self, platform, external_id):
+        """Canonical multi-platform lookup by (platform, external_id)."""
+        if external_id is None:
+            return None
+        with self._conn() as c:
+            return self._row_to_problem(c.execute(
+                "SELECT * FROM problems WHERE platform=? AND external_id=?",
+                (platform, str(external_id)),
+            ).fetchone())
+
+    def get_problem_by_number(self, number):
+        """Legacy LeetCode-only lookup; prefer get_problem_by_external."""
+        if number is None:
+            return None
+        with self._conn() as c:
+            return self._row_to_problem(c.execute(
+                "SELECT * FROM problems WHERE leetcode_number=?", (number,)
+            ).fetchone())
+
     def update_problem(self, pid, data):
         sets, vals = [], []
         for k in ('leetcode_number', 'title', 'description', 'difficulty',
-                   'elo_rating', 'source_url', 'remind_date', 'last_visited_at'):
+                   'elo_rating', 'source_url', 'remind_date', 'last_visited_at',
+                   'title_slug', 'imported', 'created_at', 'platform', 'external_id'):
             if k in data:
                 sets.append(f"{k}=?")
                 vals.append(data[k])
@@ -193,11 +264,12 @@ class Database:
 
     # --- Revisions ---
 
-    def add_revision(self, pid):
-        today = date.today().isoformat()
+    def add_revision(self, pid, revised_at=None):
+        # revised_at may be overridden (e.g. LeetCode re-submission date on sync)
+        day = revised_at or date.today().isoformat()
         now = datetime.now().isoformat()
         with self._conn() as c:
-            c.execute("INSERT INTO revisions (problem_id,revised_at) VALUES (?,?)", (pid, today))
+            c.execute("INSERT INTO revisions (problem_id,revised_at) VALUES (?,?)", (pid, day))
             c.execute(
                 "UPDATE problems SET revision_count=revision_count+1, last_visited_at=? WHERE id=?",
                 (now, pid),
@@ -241,7 +313,10 @@ class Database:
         end = f"{year + (1 if month == 12 else 0)}-{(month % 12) + 1:02d}-01"
         with self._conn() as c:
             created = c.execute(
-                "SELECT * FROM problems WHERE created_at>=? AND created_at<?", (start, end)
+                """SELECT * FROM problems
+                   WHERE created_at>=? AND created_at<?
+                   AND (imported IS NULL OR imported=0)""",
+                (start, end),
             ).fetchall()
             revisions = c.execute(
                 """SELECT r.revised_at, r.problem_id, p.title, p.leetcode_number, p.last_visited_at
@@ -272,7 +347,9 @@ class Database:
         start = (date.today() - timedelta(days=365)).isoformat()
         with self._conn() as c:
             created = c.execute(
-                "SELECT DATE(created_at) as day, COUNT(*) as n FROM problems WHERE DATE(created_at)>=? GROUP BY day",
+                """SELECT DATE(created_at) as day, COUNT(*) as n FROM problems
+                   WHERE DATE(created_at)>=? AND (imported IS NULL OR imported=0)
+                   GROUP BY day""",
                 (start,),
             ).fetchall()
             revised = c.execute(

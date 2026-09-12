@@ -476,6 +476,134 @@ a:hover { color: var(--accent-hover); }
 .stat-count.medium { color: var(--medium); }
 .stat-count.hard { color: var(--hard); }
 
+/* ── LeetCode cookie guide ─────────────────────────────── */
+
+.lc-guide {
+    margin-bottom: 8px;
+    border: 1.5px solid var(--border-light);
+    border-radius: 6px;
+    background: var(--bg-card);
+    padding: 6px 10px;
+}
+.lc-guide summary {
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    list-style: none;
+}
+.lc-guide summary::-webkit-details-marker { display: none; }
+.lc-guide summary::before { content: '▸ '; color: var(--text-muted); }
+.lc-guide[open] summary::before { content: '▾ '; }
+.lc-guide[open] summary { margin-bottom: 6px; }
+.lc-guide ol {
+    margin: 0;
+    padding-left: 16px;
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--text-secondary);
+}
+.lc-guide li { margin-bottom: 2px; }
+.lc-guide code {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    background: var(--bg-card-hover);
+    border: 1px solid var(--border-light);
+    border-radius: 3px;
+    padding: 0 4px;
+}
+.lc-guide kbd {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    background: var(--bg-card-hover);
+    border: 1px solid var(--ink);
+    border-radius: 3px;
+    padding: 0 5px;
+}
+.lc-guide a { color: var(--medium); }
+.lc-guide-note {
+    font-size: 10.5px;
+    line-height: 1.4;
+    color: var(--text-muted);
+    margin-top: 6px;
+}
+
+/* ── LeetCode panel ────────────────────────────────────── */
+
+.lc-panel {
+    margin-top: 20px;
+    background: var(--bg-card);
+    border: 2px solid var(--ink);
+    border-radius: 15px 225px 15px 255px/255px 15px 225px 15px;
+    padding: 14px 18px;
+}
+
+.lc-panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+
+.lc-badge {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .4px;
+    color: var(--medium);
+    border: 2px solid var(--medium);
+    background: var(--medium-dim);
+    border-radius: 10px 4px 10px 4px;
+    padding: 2px 8px;
+    margin-right: 8px;
+}
+
+.lc-user {
+    font-weight: 600;
+    color: var(--text-primary);
+    text-decoration: none;
+}
+.lc-user:hover { text-decoration: underline; }
+
+.lc-rank {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-left: 10px;
+}
+
+.lc-stats {
+    display: flex;
+    gap: 18px;
+    flex-wrap: wrap;
+}
+
+.lc-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 60px;
+}
+
+.lc-num {
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+}
+.lc-num.easy { color: var(--easy); }
+.lc-num.medium { color: var(--medium); }
+.lc-num.hard { color: var(--hard); }
+
+.lc-cap {
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: .3px;
+    margin-top: 2px;
+}
+
 /* ── Topics ────────────────────────────────────────────── */
 .topics-section { margin-top: 20px; }
 

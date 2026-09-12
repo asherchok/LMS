@@ -39,6 +39,32 @@ class TestProblems:
     def test_get_nonexistent_returns_none(self, tmp_db):
         assert tmp_db.get_problem(999) is None
 
+    def test_defaults_platform_and_derives_external_id(self, tmp_db, sample_problem):
+        pid = tmp_db.create_problem(sample_problem)
+        p = tmp_db.get_problem(pid)
+        assert p['platform'] == 'leetcode'
+        assert p['external_id'] == '1'          # derived from leetcode_number
+
+    def test_get_by_external(self, tmp_db, sample_problem):
+        pid = tmp_db.create_problem(sample_problem)
+        assert tmp_db.get_problem_by_external('leetcode', '1')['id'] == pid
+        assert tmp_db.get_problem_by_external('leetcode', 1)['id'] == pid   # int coerced
+        assert tmp_db.get_problem_by_external('cses', '1') is None          # scoped
+
+    def test_same_external_id_different_platforms_coexist(self, tmp_db):
+        lc = tmp_db.create_problem({'title': 'LC 1', 'platform': 'leetcode', 'external_id': '1'})
+        cses = tmp_db.create_problem({'title': 'CSES 1', 'platform': 'cses', 'external_id': '1'})
+        assert lc != cses
+        assert tmp_db.get_problem_by_external('leetcode', '1')['id'] == lc
+        assert tmp_db.get_problem_by_external('cses', '1')['id'] == cses
+
+    def test_slug_lookup_can_scope_by_platform(self, tmp_db):
+        pid = tmp_db.create_problem({'title': 'T', 'platform': 'leetcode',
+                                     'external_id': '1', 'title_slug': 'two-sum'})
+        assert tmp_db.get_problem_by_slug('two-sum')['id'] == pid
+        assert tmp_db.get_problem_by_slug('two-sum', 'leetcode')['id'] == pid
+        assert tmp_db.get_problem_by_slug('two-sum', 'cses') is None
+
     def test_update(self, tmp_db, sample_problem):
         pid = tmp_db.create_problem(sample_problem)
         tmp_db.update_problem(pid, {'title': 'Three Sum', 'difficulty': 'medium'})

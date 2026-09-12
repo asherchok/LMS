@@ -286,6 +286,362 @@ class TestLeetCodeFetch:
         assert 'network error' in resp.get_json()['error']
 
 
+# ── LeetCode profile + sync (public-by-username) ────────────
+
+MATCHED_USER = {
+    'username': 'neetcode',
+    'profile': {'realName': 'Neet', 'ranking': 12345, 'reputation': 1},
+    'submitStatsGlobal': {'acSubmissionNum': [
+        {'difficulty': 'All', 'count': 2},
+        {'difficulty': 'Easy', 'count': 1},
+        {'difficulty': 'Medium', 'count': 1},
+        {'difficulty': 'Hard', 'count': 0},
+    ]},
+    'userCalendar': {'streak': 3, 'totalActiveDays': 10,
+                     'submissionCalendar': '{"1700000000": 2}'},
+}
+
+QUESTIONS = {
+    'two-sum': {'questionFrontendId': '1', 'title': 'Two Sum', 'difficulty': 'Easy',
+                'topicTags': [{'name': 'Array'}], 'content': '<p>two sum</p>'},
+    'add-two-numbers': {'questionFrontendId': '2', 'title': 'Add Two Numbers',
+                        'difficulty': 'Medium', 'topicTags': [{'name': 'Linked List'}],
+                        'content': '<p>add</p>'},
+}
+
+
+def make_lc_post(recent, matched_user=MATCHED_USER, questions=QUESTIONS):
+    """Fake requests.post that dispatches on the GraphQL query string."""
+    def fake_post(url, json=None, **kwargs):
+        q, v = json['query'], json['variables']
+        m = MagicMock()
+        if 'matchedUser' in q:
+            m.json.return_value = {'data': {'matchedUser': matched_user}}
+        elif 'recentAcSubmissionList' in q:
+            m.json.return_value = {'data': {'recentAcSubmissionList': recent}}
+        elif 'question(titleSlug' in q:
+            m.json.return_value = {'data': {'question': questions.get(v['slug'])}}
+        else:
+            m.json.return_value = {'data': {}}
+        return m
+    return fake_post
+
+
+class TestLeetCodeProfile:
+    def test_profile_success(self, app_client):
+        client, _ = app_client
+        with patch('requests.post', side_effect=make_lc_post([])):
+            resp = client.get('/api/leetcode/profile/neetcode')
+        data = resp.get_json()
+        assert resp.status_code == 200
+        assert data['username'] == 'neetcode'
+        assert data['solved']['all'] == 2
+        assert data['streak'] == 3
+        assert data['submissionCalendar'] == {'1700000000': 2}
+
+    def test_profile_not_found(self, app_client):
+        client, _ = app_client
+
+        def no_user(url, json=None, **kwargs):
+            m = MagicMock()
+            m.json.return_value = {'data': {'matchedUser': None}}
+            return m
+        with patch('requests.post', side_effect=no_user):
+            resp = client.get('/api/leetcode/profile/ghost')
+        assert resp.status_code == 404
+
+
+class TestLeetCodeSync:
+    def test_initial_sync_creates_problems(self, app_client):
+        client, app_module = app_client
+        recent = [
+            {'title': 'Two Sum', 'titleSlug': 'two-sum', 'timestamp': '1700000100'},
+            {'title': 'Add Two Numbers', 'titleSlug': 'add-two-numbers', 'timestamp': '1700000200'},
+        ]
+        with patch('requests.post', side_effect=make_lc_post(recent)):
+            resp = client.post('/api/leetcode/sync', json={'username': 'neetcode'})
+        data = resp.get_json()
+        assert resp.status_code == 200
+        assert data['new_count'] == 2
+        assert data['rep_count'] == 0
+        # Problem created with slug + real solve date as created_at.
+        p = app_module.db.get_problem_by_slug('two-sum')
+        assert p is not None
+        assert p['leetcode_number'] == 1
+        assert p['created_at'].startswith('2023-11-14')  # ts 1700000100
+
+    def test_rep_detected_for_existing_slug(self, app_client):
+        client, app_module = app_client
+        pid = app_module.db.create_problem(
+            {'title': 'Two Sum', 'title_slug': 'two-sum', 'leetcode_number': 1})
+        recent = [{'title': 'Two Sum', 'titleSlug': 'two-sum', 'timestamp': '1700000100'}]
+        with patch('requests.post', side_effect=make_lc_post(recent)):
+            resp = client.post('/api/leetcode/sync', json={'username': 'neetcode'})
+        data = resp.get_json()
+        assert data['new_count'] == 0
+        assert data['rep_count'] == 1
+        assert len(app_module.db.get_revisions(pid)) == 1
+
+    def test_dedup_by_number_protects_notes(self, app_client):
+        client, app_module = app_client
+        # Pre-existing problem tracked by number only (no slug), with notes.
+        pid = app_module.db.create_problem({'title': 'Two Sum', 'leetcode_number': 1})
+        tabs = app_module.db.get_tabs(pid)
+        app_module.db.update_tab(tabs[0]['id'], {'content': [{'note': 'my solution'}]})
+
+        recent = [{'title': 'Two Sum', 'titleSlug': 'two-sum', 'timestamp': '1700000100'}]
+        with patch('requests.post', side_effect=make_lc_post(recent)):
+            resp = client.post('/api/leetcode/sync', json={'username': 'neetcode'})
+        data = resp.get_json()
+        # No duplicate created; treated as a rep of the existing problem.
+        assert data['new_count'] == 0
+        assert data['rep_count'] == 1
+        assert app_module.db.get_problem_by_slug('two-sum')['id'] == pid
+        # Notes preserved.
+        assert app_module.db.get_tabs(pid)[0]['content'] == [{'note': 'my solution'}]
+
+    def test_watermark_skips_already_synced(self, app_client):
+        client, app_module = app_client
+        recent = [{'title': 'Two Sum', 'titleSlug': 'two-sum', 'timestamp': '1700000100'}]
+        with patch('requests.post', side_effect=make_lc_post(recent)):
+            client.post('/api/leetcode/sync', json={'username': 'neetcode'})
+            resp = client.post('/api/leetcode/sync', json={'username': 'neetcode'})
+        data = resp.get_json()
+        assert data['new_count'] == 0
+        assert data['rep_count'] == 0
+
+    def test_calendar_merged_into_contributions(self, app_client):
+        client, _ = app_client
+        with patch('requests.post', side_effect=make_lc_post([])):
+            client.post('/api/leetcode/sync', json={'username': 'neetcode'})
+        resp = client.get('/api/contributions')
+        data = resp.get_json()
+        # ts 1700000000 → 2023-11-14 (UTC), count 2 from submissionCalendar.
+        assert data.get('2023-11-14') == 2
+
+    def test_sync_requires_username(self, app_client):
+        client, _ = app_client
+        resp = client.post('/api/leetcode/sync', json={})
+        assert resp.status_code == 400
+
+
+# ── LeetCode account / auth (v2) ────────────────────────────
+
+def problems_all_payload(status_map):
+    """Build a /api/problems/all/ style payload. status_map: {slug: 'ac'|None}."""
+    meta = {
+        'two-sum': (1, 'Two Sum', 1),
+        'add-two-numbers': (2, 'Add Two Numbers', 2),
+        'median-two-sorted': (4, 'Median of Two Sorted Arrays', 3),
+    }
+    pairs = []
+    for slug, (num, title, level) in meta.items():
+        pairs.append({
+            'stat': {'question__title': title, 'question__title_slug': slug,
+                     'frontend_question_id': num},
+            'difficulty': {'level': level},
+            'status': status_map.get(slug),
+            'paid_only': False,
+        })
+    return {'stat_status_pairs': pairs}
+
+
+def signed_in_post(username='votrubac'):
+    def fake_post(url, json=None, **kwargs):
+        m = MagicMock()
+        m.json.return_value = {'data': {'userStatus': {'username': username, 'isSignedIn': True}}}
+        return m
+    return fake_post
+
+
+class TestLeetCodeAccount:
+    def _login(self, client):
+        with patch('requests.post', side_effect=signed_in_post()):
+            return client.post('/api/leetcode/login',
+                               json={'session': 'sess-token', 'csrf': 'csrf-token'})
+
+    def test_login_success(self, app_client):
+        client, app_module = app_client
+        resp = self._login(client)
+        assert resp.status_code == 200
+        assert resp.get_json()['username'] == 'votrubac'
+        # Token persisted server-side...
+        assert app_module.db.get_setting('leetcode_session') == 'sess-token'
+
+    def test_login_rejects_invalid_session(self, app_client):
+        client, _ = app_client
+
+        def not_signed_in(url, json=None, **kwargs):
+            m = MagicMock()
+            m.json.return_value = {'data': {'userStatus': {'username': '', 'isSignedIn': False}}}
+            return m
+        with patch('requests.post', side_effect=not_signed_in):
+            resp = client.post('/api/leetcode/login', json={'session': 'bad'})
+        assert resp.status_code == 401
+
+    def test_token_never_exposed_via_settings(self, app_client):
+        client, _ = app_client
+        self._login(client)
+        settings = client.get('/api/settings').get_json()
+        assert 'leetcode_session' not in settings
+        assert 'leetcode_csrf' not in settings
+        # But auth state is reported without the token.
+        auth = client.get('/api/leetcode/auth').get_json()
+        assert auth['logged_in'] is True
+        assert auth['username'] == 'votrubac'
+
+    def test_settings_put_cannot_set_token(self, app_client):
+        client, app_module = app_client
+        client.put('/api/settings', json={'leetcode_session': 'injected'})
+        assert app_module.db.get_setting('leetcode_session') in (None, '')
+
+    def test_backfill_requires_login(self, app_client):
+        client, _ = app_client
+        resp = client.post('/api/leetcode/backfill')
+        assert resp.status_code == 401
+
+    def test_backfill_imports_only_solved(self, app_client):
+        client, app_module = app_client
+        self._login(client)
+        payload = problems_all_payload(
+            {'two-sum': 'ac', 'add-two-numbers': 'ac', 'median-two-sorted': None})
+        mock_get = MagicMock()
+        mock_get.json.return_value = payload
+        with patch('requests.get', return_value=mock_get):
+            resp = client.post('/api/leetcode/backfill')
+        data = resp.get_json()
+        assert data['created'] == 2                 # only the two AC problems
+        assert data['solved_total'] == 2
+        assert app_module.db.get_problem_by_slug('two-sum') is not None
+        assert app_module.db.get_problem_by_slug('median-two-sorted') is None  # unsolved skipped
+
+    def test_backfill_dedups_and_backfills_slug(self, app_client):
+        client, app_module = app_client
+        self._login(client)
+        # Pre-existing problem tracked by number only (no slug), with notes.
+        pid = app_module.db.create_problem({'title': 'Two Sum', 'leetcode_number': 1})
+        tabs = app_module.db.get_tabs(pid)
+        app_module.db.update_tab(tabs[0]['id'], {'content': [{'note': 'mine'}]})
+
+        payload = problems_all_payload({'two-sum': 'ac'})
+        mock_get = MagicMock()
+        mock_get.json.return_value = payload
+        with patch('requests.get', return_value=mock_get):
+            resp = client.post('/api/leetcode/backfill')
+        data = resp.get_json()
+        assert data['created'] == 0 and data['skipped'] == 1     # no duplicate
+        assert app_module.db.get_problem_by_slug('two-sum')['id'] == pid  # slug backfilled
+        assert app_module.db.get_tabs(pid)[0]['content'] == [{'note': 'mine'}]  # notes kept
+
+    def test_imported_problems_stay_off_calendar(self, app_client):
+        client, app_module = app_client
+        self._login(client)
+        payload = problems_all_payload({'two-sum': 'ac', 'add-two-numbers': 'ac'})
+        mock_get = MagicMock()
+        mock_get.json.return_value = payload
+        with patch('requests.get', return_value=mock_get):
+            client.post('/api/leetcode/backfill')
+        # They exist and count toward stats...
+        assert len(app_module.db.list_problems()) == 2
+        # ...but do NOT appear on today's calendar or spike the activity graph.
+        today = date.today()
+        cal = client.get(f'/api/calendar/{today.year}/{today.month}').get_json()
+        assert all(len(v) == 0 for v in cal.values())
+        contrib = client.get('/api/contributions').get_json()
+        assert contrib.get(today.isoformat(), 0) == 0
+
+    def test_logout_clears_session(self, app_client):
+        client, app_module = app_client
+        self._login(client)
+        client.post('/api/leetcode/logout')
+        assert client.get('/api/leetcode/auth').get_json()['logged_in'] is False
+        assert not app_module.db.get_setting('leetcode_session')
+
+
+class TestProviderRoutes:
+    def test_list_providers(self, app_client):
+        client, _ = app_client
+        data = client.get('/api/providers').get_json()
+        lc = next(p for p in data if p['id'] == 'leetcode')
+        assert lc['name'] == 'LeetCode'
+        assert 'auth_backfill' in lc['capabilities']
+        assert {'key': 'session', 'label': 'LEETCODE_SESSION'} in lc['auth_fields']
+        assert lc['logged_in'] is False
+
+    def test_unknown_platform_404(self, app_client):
+        client, _ = app_client
+        assert client.get('/api/providers/hackerrank/profile/x').status_code == 404
+        assert client.post('/api/providers/hackerrank/sync').status_code == 404
+
+    def test_generic_profile_matches_alias(self, app_client):
+        client, _ = app_client
+        with patch('requests.post', side_effect=make_lc_post([])):
+            generic = client.get('/api/providers/leetcode/profile/neetcode').get_json()
+            alias = client.get('/api/leetcode/profile/neetcode').get_json()
+        assert generic == alias
+        assert generic['username'] == 'neetcode'
+
+    def test_generic_sync_creates_problems(self, app_client):
+        client, app_module = app_client
+        recent = [{'title': 'Two Sum', 'titleSlug': 'two-sum', 'timestamp': '1700000100'}]
+        with patch('requests.post', side_effect=make_lc_post(recent)):
+            resp = client.post('/api/providers/leetcode/sync', json={'username': 'neetcode'})
+        assert resp.get_json()['new_count'] == 1
+        assert app_module.db.get_problem_by_external('leetcode', '1') is not None
+
+    def test_generic_login_and_backfill(self, app_client):
+        client, app_module = app_client
+        with patch('requests.post', side_effect=signed_in_post()):
+            login = client.post('/api/providers/leetcode/login',
+                                json={'session': 'sess', 'csrf': 'c'})
+        assert login.get_json()['username'] == 'votrubac'
+        mock_get = MagicMock()
+        mock_get.json.return_value = problems_all_payload({'two-sum': 'ac'})
+        with patch('requests.get', return_value=mock_get):
+            bf = client.post('/api/providers/leetcode/backfill')
+        assert bf.get_json()['created'] == 1
+
+    def test_capability_gating(self, app_client, monkeypatch):
+        client, app_module = app_client
+        # Temporarily strip a capability and confirm the route rejects it.
+        from providers import get_provider, PUBLIC_RECENT
+        lc = get_provider('leetcode')
+        monkeypatch.setattr(lc, 'capabilities', lc.capabilities - {PUBLIC_RECENT})
+        resp = client.post('/api/providers/leetcode/sync', json={'username': 'x'})
+        assert resp.status_code == 400
+
+
+class TestEnrichProblem:
+    def test_enrich_fills_empty_description(self, app_client):
+        client, app_module = app_client
+        pid = app_module.db.create_problem(
+            {'title': 'Two Sum', 'title_slug': 'two-sum', 'leetcode_number': 1,
+             'imported': True})
+        with patch('requests.post', side_effect=make_lc_post([])):
+            resp = client.post(f'/api/problems/{pid}/enrich')
+        data = resp.get_json()
+        assert data['enriched'] is True
+        assert 'two sum' in data['problem']['description']
+        assert 'Array' in data['problem']['tags']
+
+    def test_enrich_never_overwrites_existing(self, app_client):
+        client, app_module = app_client
+        pid = app_module.db.create_problem(
+            {'title': 'Two Sum', 'title_slug': 'two-sum',
+             'description': 'MY OWN NOTES', 'leetcode_number': 1})
+        with patch('requests.post', side_effect=make_lc_post([])):
+            resp = client.post(f'/api/problems/{pid}/enrich')
+        data = resp.get_json()
+        assert data['enriched'] is False
+        assert data['problem']['description'] == 'MY OWN NOTES'
+
+    def test_enrich_noop_without_slug(self, app_client):
+        client, app_module = app_client
+        pid = app_module.db.create_problem({'title': 'Manual', 'leetcode_number': None})
+        resp = client.post(f'/api/problems/{pid}/enrich')
+        assert resp.get_json()['enriched'] is False
+
+
 class TestFileUpload:
     def test_upload_file(self, app_client):
         client, _ = app_client
