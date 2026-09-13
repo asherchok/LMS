@@ -395,13 +395,22 @@ async function syncLeetCode() {
 // ── LeetCode account (v2) ─────────────────────────────────
 
 async function loadAuthState() {
-    const resp = await fetch('/api/leetcode/auth');
+    const resp = await fetch('/api/leetcode/auth?validate=1');
     const a = await resp.json();
     const loggedIn = !!a.logged_in;
-    document.getElementById('lcLoginForm').classList.toggle('hidden', loggedIn);
-    document.getElementById('lcAccountActions').classList.toggle('hidden', !loggedIn);
+    const expired = loggedIn && a.valid === false;   // stored token no longer works
+    // On expiry, re-show the login form so a fresh token can be pasted.
+    document.getElementById('lcLoginForm').classList.toggle('hidden', loggedIn && !expired);
+    document.getElementById('lcAccountActions').classList.toggle('hidden', !loggedIn || expired);
     document.getElementById('lcAuthState').textContent =
-        loggedIn ? `— logged in${a.username ? ' as ' + a.username : ''}` : '— not logged in';
+        expired ? '— session expired, log in again'
+        : loggedIn ? `— logged in${a.username ? ' as ' + a.username : ''}`
+        : '— not logged in';
+    const st = document.getElementById('lcAuthStatus');
+    if (st && expired) {
+        st.textContent = 'Your saved LeetCode session expired. Paste a fresh LEETCODE_SESSION above.';
+        st.style.color = 'var(--hard)';
+    }
 }
 
 async function leetcodeLogin() {

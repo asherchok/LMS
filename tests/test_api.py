@@ -601,6 +601,44 @@ class TestProviderRoutes:
             bf = client.post('/api/providers/leetcode/backfill')
         assert bf.get_json()['created'] == 1
 
+    def test_submissions_reports_expired_session(self, app_client):
+        client, app_module = app_client
+        app_module.db.set_setting('leetcode_session', 'stale-token')   # was logged in
+
+        def expired(url, json=None, **kwargs):
+            q = json['query']
+            m = MagicMock()
+            if 'submissionList' in q:
+                m.json.return_value = {'data': {'submissionList': {'hasNext': False, 'submissions': []}}}
+            elif 'userStatus' in q:
+                m.json.return_value = {'data': {'userStatus': {'username': '', 'isSignedIn': False}}}
+            else:
+                m.json.return_value = {'data': {}}
+            return m
+        with patch('requests.post', side_effect=expired):
+            resp = client.get('/api/providers/leetcode/submissions/merge-sorted-array')
+        assert resp.status_code == 401
+        assert resp.get_json()['error'] == 'session_expired'
+
+    def test_submissions_empty_but_valid_is_not_expired(self, app_client):
+        client, app_module = app_client
+        app_module.db.set_setting('leetcode_session', 'good-token')
+
+        def valid_empty(url, json=None, **kwargs):
+            q = json['query']
+            m = MagicMock()
+            if 'submissionList' in q:
+                m.json.return_value = {'data': {'submissionList': {'hasNext': False, 'submissions': []}}}
+            elif 'userStatus' in q:
+                m.json.return_value = {'data': {'userStatus': {'username': 'u', 'isSignedIn': True}}}
+            else:
+                m.json.return_value = {'data': {}}
+            return m
+        with patch('requests.post', side_effect=valid_empty):
+            resp = client.get('/api/providers/leetcode/submissions/two-sum')
+        assert resp.status_code == 200
+        assert resp.get_json()['submissions'] == []
+
     def test_capability_gating(self, app_client, monkeypatch):
         client, app_module = app_client
         # Temporarily strip a capability and confirm the route rejects it.

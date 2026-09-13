@@ -915,7 +915,11 @@ async function importLeetCodeCode() {
     setStatus('Fetching your submissions from LeetCode…');
     try {
         const listResp = await fetch(`/api/leetcode/submissions/${PROBLEM_SLUG}`);
-        if (listResp.status === 401) { setStatus('Log in to LeetCode from the home page Settings first.', 'var(--hard)'); return; }
+        if (listResp.status === 401) {
+            const err = await listResp.json().catch(() => ({}));
+            setStatus(err.message || 'Log in to LeetCode from the home page Settings first.', 'var(--hard)');
+            return;
+        }
         const list = await listResp.json();
         const subs = list.submissions || [];
         const accepted = subs.find(s => s.statusDisplay === 'Accepted') || subs[0];

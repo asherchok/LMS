@@ -9,7 +9,7 @@ from providers import (get_provider, sensitive_setting_keys, PROVIDERS,
                        PUBLIC_PROFILE, PUBLIC_RECENT, AUTH_BACKFILL, SUBMISSION_CODE)
 
 app = Flask(__name__)
-VERSION = '1.5.0'
+VERSION = '1.5.1'
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE, 'config.json')
@@ -319,10 +319,17 @@ def _svc_sync(provider):
 
 
 def _svc_auth(provider):
-    return jsonify({
-        'logged_in': bool(db.get_setting(_pkey(provider, 'session'))),
-        'username': db.get_setting(_pkey(provider, 'username')),
-    })
+    logged_in = bool(db.get_setting(_pkey(provider, 'session')))
+    out = {'logged_in': logged_in,
+           'username': db.get_setting(_pkey(provider, 'username'))}
+    # Optional live check — is the stored session still valid? (extra request)
+    if logged_in and request.args.get('validate'):
+        try:
+            creds = _provider_creds(provider)
+            out['valid'] = bool(creds and provider.verify_auth(creds))
+        except Exception:
+            out['valid'] = None   # couldn't reach the platform; unknown
+    return jsonify(out)
 
 
 def _svc_login(provider):
@@ -403,6 +410,13 @@ def _svc_backfill(provider):
         return jsonify({'error': str(e)}), 500
 
 
+def _session_expired_response():
+    return jsonify({
+        'error': 'session_expired',
+        'message': 'Your LeetCode session expired. Log out and log back in from Settings.',
+    }), 401
+
+
 def _svc_submissions(provider, slug):
     if not provider.has(SUBMISSION_CODE):
         return jsonify({'error': f'{provider.name} has no submissions API'}), 400
@@ -410,7 +424,14 @@ def _svc_submissions(provider, slug):
     if not creds:
         return jsonify({'error': 'Not logged in'}), 401
     try:
-        return jsonify(provider.submissions(creds, slug))
+        result = provider.submissions(creds, slug)
+        # An empty list is ambiguous: genuinely no submissions, OR an expired
+        # session (LeetCode returns null instead of 401 when the token is
+        # stale). Only when it's empty do we pay for a validity check, so we can
+        # tell the user to re-login instead of "no submissions found".
+        if not (result or {}).get('submissions') and provider.verify_auth(creds) is None:
+            return _session_expired_response()
+        return jsonify(result)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
