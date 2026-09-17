@@ -8,9 +8,17 @@
 {% block body %}
 <div class="landing">
     <!-- Sidebar -->
-    <div class="sidebar">
-        <div class="section-title">Due for Review</div>
-        <div id="reminders"></div>
+    <div class="sidebar" style="display:flex;flex-direction:column">
+        <div class="sidebar-tabs">
+            <button class="sidebar-tab active" data-tab="dfr" onclick="switchSidebarTab('dfr')">Due for Review</button>
+            <button class="sidebar-tab" data-tab="upcoming" onclick="switchSidebarTab('upcoming')">Coming Up</button>
+        </div>
+        <div id="dfrPanel" class="sidebar-panel" style="max-height:30vh;min-height:60px">
+            <div id="dfrList"></div>
+        </div>
+        <div id="upcomingPanel" class="sidebar-panel hidden" style="max-height:30vh;min-height:60px">
+            <div id="upcomingList"></div>
+        </div>
 
         <div class="search-box">
             <input type="text" class="search-input" id="searchInput"
@@ -20,7 +28,9 @@
         <div id="activeFilters"></div>
 
         <div class="section-title" style="margin-top:4px">All Problems</div>
-        <div class="problem-list" id="problemList"></div>
+        <div class="problem-list" id="problemList" style="max-height:none;flex:1;overflow-y:auto"></div>
+        <div class="pagination" id="problemPagination"></div>
+
     </div>
 
     <!-- Main content -->
@@ -43,7 +53,10 @@
 
         <!-- Topics -->
         <div class="topics-section">
-            <div class="section-title">Topics</div>
+            <div class="section-title" style="display:flex;align-items:center;gap:8px">
+                Topics
+                <button class="topic-reset-btn hidden" id="topicResetBtn" onclick="resetTopicFilters()">Reset</button>
+            </div>
             <div class="topics-wrap" id="topicBubbles"></div>
         </div>
 
@@ -195,7 +208,24 @@
                 <div id="lcAuthStatus" style="font-size:11px;margin-top:4px"></div>
             </div>
         </div>
-        <div class="setting-row" style="border-bottom:none">
+        <div class="setting-row">
+            <div>
+                <div class="setting-label">Open in New Tab</div>
+                <div class="setting-desc">Open problems and new creations in a new browser tab</div>
+            </div>
+            <div class="toggle-switch on" id="settingNewTab" onclick="toggleNewTabSetting()"></div>
+        </div>
+        <div class="setting-row">
+            <div>
+                <div class="setting-label">DFR Threshold</div>
+                <div class="setting-desc">Minimum days overdue to show in Due for Review</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:4px">
+                <input type="number" class="form-input" id="settingDfrDays" style="width:60px;font-size:12px;padding:4px 8px;text-align:center" min="1" value="1" onchange="saveDfrDays()">
+                <span style="font-size:11px;color:var(--text-muted)">days</span>
+            </div>
+        </div>
+        <div class="setting-row">
             <div style="flex:1">
                 <div class="setting-label">Data Directory</div>
                 <div class="setting-desc">Where problems and settings are stored</div>
@@ -205,6 +235,20 @@
                     <button class="btn btn-sm btn-primary" onclick="saveDataDir()">Save</button>
                 </div>
                 <div id="dataDirStatus" style="font-size:11px;margin-top:4px"></div>
+            </div>
+        </div>
+        <div class="setting-row">
+            <div style="flex:1">
+                <div class="setting-label">Disk Usage</div>
+                <div class="setting-desc">Total storage used by LMS data</div>
+                <div class="disk-usage" id="diskUsage">Loading...</div>
+            </div>
+        </div>
+        <div class="setting-row" style="border-bottom:none">
+            <div style="flex:1">
+                <div class="setting-label">Trash</div>
+                <div class="setting-desc">Deleted problems are auto-removed after 7 days</div>
+                <div id="trashList" style="margin-top:6px"></div>
             </div>
         </div>
         <div class="form-actions">

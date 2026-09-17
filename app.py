@@ -9,7 +9,7 @@ from providers import (get_provider, sensitive_setting_keys, PROVIDERS,
                        PUBLIC_PROFILE, PUBLIC_RECENT, AUTH_BACKFILL, SUBMISSION_CODE)
 
 app = Flask(__name__)
-VERSION = '1.5.0'
+VERSION = '1.3.0'
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE, 'config.json')
@@ -42,16 +42,19 @@ db = Database(os.path.join(config['data_dir'], 'lms.db'))
 
 @app.route('/')
 def landing():
+    db.auto_cleanup_deleted()
     return render_template('landing.html')
 
 
 @app.route('/problem/<int:pid>')
 def problem_view(pid):
-    p = db.get_problem(pid)
+    p = db.get_problem(pid, include_deleted=True)
     if not p:
         return "Problem not found", 404
-    db.update_last_visited(pid)
-    return render_template('problem.html', problem=p)
+    is_deleted = bool(p.get('deleted_at'))
+    if not is_deleted:
+        db.update_last_visited(pid)
+    return render_template('problem.html', problem=p, is_deleted=is_deleted)
 
 
 # ── API: Problems ────────────────────────────────────────────
@@ -73,7 +76,8 @@ def api_create_problem():
 
 @app.route('/api/problems/<int:pid>', methods=['GET'])
 def api_get_problem(pid):
-    p = db.get_problem(pid)
+    include = request.args.get('include_deleted') == '1'
+    p = db.get_problem(pid, include_deleted=include)
     return jsonify(p) if p else (jsonify({'error': 'Not found'}), 404)
 
 
@@ -85,8 +89,23 @@ def api_update_problem(pid):
 
 @app.route('/api/problems/<int:pid>', methods=['DELETE'])
 def api_delete_problem(pid):
-    db.delete_problem(pid)
+    permanent = request.args.get('permanent') == '1'
+    if permanent:
+        db.permanently_delete_problem(pid)
+    else:
+        db.delete_problem(pid)
     return jsonify({'ok': True})
+
+
+@app.route('/api/problems/<int:pid>/restore', methods=['POST'])
+def api_restore_problem(pid):
+    db.restore_problem(pid)
+    return jsonify({'ok': True})
+
+
+@app.route('/api/problems/deleted', methods=['GET'])
+def api_deleted_problems():
+    return jsonify(db.list_deleted_problems())
 
 
 # ── API: Tabs ────────────────────────────────────────────────
@@ -114,16 +133,28 @@ def api_delete_tab(tid):
     return jsonify({'ok': True})
 
 
+@app.route('/api/problems/<int:pid>/tabs/reorder', methods=['POST'])
+def api_reorder_tabs(pid):
+    tab_ids = (request.json or {}).get('tab_ids', [])
+    db.reorder_tabs(tab_ids)
+    return jsonify({'ok': True})
+
+
 # ── API: Revisions ───────────────────────────────────────────
 
 @app.route('/api/problems/<int:pid>/revise', methods=['POST'])
 def api_revise(pid):
-    db.add_revision(pid)
     body = request.json or {}
-    if body.get('remind_days'):
-        rd = (date.today() + timedelta(days=int(body['remind_days']))).isoformat()
-        db.update_problem(pid, {'remind_date': rd})
-    return jsonify({'ok': True})
+    days = body.get('remind_days')
+    db.add_revision(pid, remind_days=int(days) if days is not None else None)
+    if days is not None:
+        days = int(days)
+        if days <= 0:
+            db.update_problem(pid, {'remind_date': None, 'remind_days': 0})
+        else:
+            rd = (date.today() + timedelta(days=days)).isoformat()
+            db.update_problem(pid, {'remind_date': rd, 'remind_days': days})
+    return jsonify({'ok': True, 'remind_days': days})
 
 
 @app.route('/api/problems/<int:pid>/revisions', methods=['GET'])
@@ -144,6 +175,12 @@ def api_stats():
 @app.route('/api/reminders')
 def api_reminders():
     return jsonify(db.get_reminders())
+
+
+@app.route('/api/upcoming')
+def api_upcoming():
+    days = int(request.args.get('days', 7))
+    return jsonify(db.get_upcoming_reminders(days))
 
 
 @app.route('/api/calendar/<int:year>/<int:month>')
@@ -689,6 +726,27 @@ def api_video_thumbnail():
             pass
         return jsonify({'thumbnail': None, 'type': 'youtube', 'video_id': vid})
     return jsonify({'thumbnail': None, 'type': 'url', 'video_id': None})
+
+
+@app.route('/api/disk-usage')
+def api_disk_usage():
+    data_dir = config['data_dir']
+    total_size = 0
+    file_count = 0
+    for dirpath, _dirnames, filenames in os.walk(data_dir):
+        for f in filenames:
+            fp = os.path.join(dirpath, f)
+            try:
+                total_size += os.path.getsize(fp)
+                file_count += 1
+            except OSError:
+                pass
+    return jsonify({
+        'total_bytes': total_size,
+        'total_mb': round(total_size / (1024 * 1024), 2),
+        'file_count': file_count,
+        'data_dir': data_dir,
+    })
 
 
 if __name__ == '__main__':

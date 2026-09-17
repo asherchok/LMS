@@ -67,14 +67,8 @@ class Database:
             cols = [r['name'] for r in c.execute("PRAGMA table_info(problems)").fetchall()]
             if 'title_slug' not in cols:
                 c.execute("ALTER TABLE problems ADD COLUMN title_slug TEXT")
-            # `imported` marks bulk-backfilled solved problems whose real solve
-            # date is unknown — they stay off the calendar/activity graph until
-            # engaged with (which sets a real created_at and clears the flag).
             if 'imported' not in cols:
                 c.execute("ALTER TABLE problems ADD COLUMN imported INTEGER DEFAULT 0")
-            # Multi-platform identity: (platform, external_id) is the canonical
-            # key. Existing rows are LeetCode; backfill external_id from the old
-            # leetcode_number so dedup keeps working across the migration.
             if 'platform' not in cols:
                 c.execute("ALTER TABLE problems ADD COLUMN platform TEXT DEFAULT 'leetcode'")
             if 'external_id' not in cols:
@@ -83,6 +77,15 @@ class Database:
                     "UPDATE problems SET external_id = CAST(leetcode_number AS TEXT) "
                     "WHERE external_id IS NULL AND leetcode_number IS NOT NULL"
                 )
+            if 'deleted_at' not in cols:
+                c.execute("ALTER TABLE problems ADD COLUMN deleted_at TEXT")
+            if 'remind_days' not in cols:
+                c.execute("ALTER TABLE problems ADD COLUMN remind_days INTEGER")
+
+            tab_cols = [r['name'] for r in c.execute("PRAGMA table_info(tabs)").fetchall()]
+            if 'sort_order' not in tab_cols:
+                c.execute("ALTER TABLE tabs ADD COLUMN sort_order INTEGER DEFAULT 0")
+                c.execute("UPDATE tabs SET sort_order = id WHERE sort_order = 0")
 
     # --- Settings ---
 
@@ -141,12 +144,14 @@ class Database:
             )
             return pid
 
-    def get_problem(self, pid):
+    def get_problem(self, pid, include_deleted=False):
         with self._conn() as c:
             row = c.execute("SELECT * FROM problems WHERE id=?", (pid,)).fetchone()
             if row:
                 d = dict(row)
                 d['tags'] = json.loads(d['tags'])
+                if d.get('deleted_at') and not include_deleted:
+                    return None
                 return d
         return None
 
@@ -191,7 +196,8 @@ class Database:
         sets, vals = [], []
         for k in ('leetcode_number', 'title', 'description', 'difficulty',
                    'elo_rating', 'source_url', 'remind_date', 'last_visited_at',
-                   'title_slug', 'imported', 'created_at', 'platform', 'external_id'):
+                   'title_slug', 'imported', 'created_at', 'platform', 'external_id',
+                   'deleted_at', 'remind_days'):
             if k in data:
                 sets.append(f"{k}=?")
                 vals.append(data[k])
@@ -206,11 +212,33 @@ class Database:
 
     def delete_problem(self, pid):
         with self._conn() as c:
+            c.execute("UPDATE problems SET deleted_at=? WHERE id=?",
+                      (datetime.now().isoformat(), pid))
+
+    def permanently_delete_problem(self, pid):
+        with self._conn() as c:
             c.execute("DELETE FROM problems WHERE id=?", (pid,))
+
+    def restore_problem(self, pid):
+        with self._conn() as c:
+            c.execute("UPDATE problems SET deleted_at=NULL WHERE id=?", (pid,))
+
+    def list_deleted_problems(self):
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT * FROM problems WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC"
+            ).fetchall()
+            return [dict(r) | {'tags': json.loads(r['tags'])} for r in rows]
+
+    def auto_cleanup_deleted(self, days=7):
+        cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+        with self._conn() as c:
+            c.execute("DELETE FROM problems WHERE deleted_at IS NOT NULL AND deleted_at<?",
+                      (cutoff,))
 
     def list_problems(self, search=None, tag=None, difficulty=None):
         q = "SELECT * FROM problems"
-        conds, params = [], []
+        conds, params = ["deleted_at IS NULL"], []
         if search:
             conds.append("(title LIKE ? OR description LIKE ? OR tags LIKE ?)")
             params += [f"%{search}%"] * 3
@@ -220,8 +248,7 @@ class Database:
         if difficulty:
             conds.append("difficulty=?")
             params.append(difficulty)
-        if conds:
-            q += " WHERE " + " AND ".join(conds)
+        q += " WHERE " + " AND ".join(conds)
         q += " ORDER BY created_at DESC"
         with self._conn() as c:
             rows = c.execute(q, params).fetchall()
@@ -232,18 +259,27 @@ class Database:
     def get_tabs(self, pid):
         with self._conn() as c:
             rows = c.execute(
-                "SELECT * FROM tabs WHERE problem_id=? ORDER BY created_at ASC", (pid,)
+                "SELECT * FROM tabs WHERE problem_id=? ORDER BY sort_order ASC, created_at ASC",
+                (pid,),
             ).fetchall()
             return [dict(r) | {'content': json.loads(r['content'])} for r in rows]
 
     def create_tab(self, pid, title):
         now = datetime.now().isoformat()
         with self._conn() as c:
+            max_order = c.execute(
+                "SELECT COALESCE(MAX(sort_order),0) FROM tabs WHERE problem_id=?", (pid,)
+            ).fetchone()[0]
             cur = c.execute(
-                "INSERT INTO tabs (problem_id,title,content,created_at,updated_at) VALUES (?,?,?,?,?)",
-                (pid, title, '[]', now, now),
+                "INSERT INTO tabs (problem_id,title,content,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,?)",
+                (pid, title, '[]', max_order + 1, now, now),
             )
             return cur.lastrowid
+
+    def reorder_tabs(self, tab_ids):
+        with self._conn() as c:
+            for i, tid in enumerate(tab_ids):
+                c.execute("UPDATE tabs SET sort_order=? WHERE id=?", (i, tid))
 
     def update_tab(self, tid, data):
         now = datetime.now().isoformat()
@@ -264,16 +300,18 @@ class Database:
 
     # --- Revisions ---
 
-    def add_revision(self, pid, revised_at=None):
-        # revised_at may be overridden (e.g. LeetCode re-submission date on sync)
+    def add_revision(self, pid, revised_at=None, remind_days=None):
         day = revised_at or date.today().isoformat()
         now = datetime.now().isoformat()
         with self._conn() as c:
             c.execute("INSERT INTO revisions (problem_id,revised_at) VALUES (?,?)", (pid, day))
+            updates = {'revision_count': None, 'last_visited_at': now}
             c.execute(
                 "UPDATE problems SET revision_count=revision_count+1, last_visited_at=? WHERE id=?",
                 (now, pid),
             )
+            if remind_days is not None:
+                c.execute("UPDATE problems SET remind_days=? WHERE id=?", (remind_days, pid))
 
     def get_revisions(self, pid):
         with self._conn() as c:
@@ -286,25 +324,39 @@ class Database:
     def get_difficulty_counts(self):
         with self._conn() as c:
             rows = c.execute(
-                "SELECT difficulty, COUNT(*) as count FROM problems GROUP BY difficulty"
+                "SELECT difficulty, COUNT(*) as count FROM problems WHERE deleted_at IS NULL GROUP BY difficulty"
             ).fetchall()
             return {r['difficulty']: r['count'] for r in rows}
 
     def get_tag_counts(self):
         with self._conn() as c:
-            rows = c.execute("SELECT tags FROM problems").fetchall()
+            rows = c.execute("SELECT tags FROM problems WHERE deleted_at IS NULL").fetchall()
             counts = {}
             for r in rows:
                 for t in json.loads(r['tags']):
                     counts[t] = counts.get(t, 0) + 1
             return counts
 
-    def get_reminders(self):
+    def get_reminders(self, dfr_days=None):
         today = date.today().isoformat()
         with self._conn() as c:
             rows = c.execute(
-                "SELECT * FROM problems WHERE remind_date IS NOT NULL AND remind_date<=? ORDER BY remind_date",
+                "SELECT * FROM problems WHERE deleted_at IS NULL AND remind_date IS NOT NULL AND remind_date<=? ORDER BY remind_date",
                 (today,),
+            ).fetchall()
+            return [dict(r) | {'tags': json.loads(r['tags'])} for r in rows]
+
+    def get_upcoming_reminders(self, days=7):
+        today = date.today()
+        future = (today + timedelta(days=days)).isoformat()
+        today_str = today.isoformat()
+        with self._conn() as c:
+            rows = c.execute(
+                """SELECT * FROM problems
+                   WHERE deleted_at IS NULL AND remind_date IS NOT NULL
+                   AND remind_date>? AND remind_date<=?
+                   ORDER BY remind_date""",
+                (today_str, future),
             ).fetchall()
             return [dict(r) | {'tags': json.loads(r['tags'])} for r in rows]
 
@@ -314,14 +366,16 @@ class Database:
         with self._conn() as c:
             created = c.execute(
                 """SELECT * FROM problems
-                   WHERE created_at>=? AND created_at<?
+                   WHERE deleted_at IS NULL
+                   AND created_at>=? AND created_at<?
                    AND (imported IS NULL OR imported=0)""",
                 (start, end),
             ).fetchall()
             revisions = c.execute(
-                """SELECT r.revised_at, r.problem_id, p.title, p.leetcode_number, p.last_visited_at
+                """SELECT r.revised_at, r.problem_id, p.title, p.leetcode_number,
+                          p.last_visited_at, p.difficulty, p.revision_count
                    FROM revisions r JOIN problems p ON r.problem_id=p.id
-                   WHERE r.revised_at>=? AND r.revised_at<?""",
+                   WHERE p.deleted_at IS NULL AND r.revised_at>=? AND r.revised_at<?""",
                 (start, end),
             ).fetchall()
         days = {}
@@ -330,17 +384,47 @@ class Database:
             day = d['created_at'][:10]
             days.setdefault(day, []).append({
                 'id': d['id'], 'leetcode_number': d['leetcode_number'],
-                'title': d['title'], 'type': 'created', 'last_visited_at': d['last_visited_at'],
+                'title': d['title'], 'type': 'created',
+                'difficulty': d['difficulty'],
+                'last_visited_at': d['last_visited_at'],
             })
         for r in revisions:
             d = dict(r)
             day = d['revised_at']
+            is_first_revision = (d.get('revision_count', 0) == 1)
             entry = {
                 'id': d['problem_id'], 'leetcode_number': d['leetcode_number'],
-                'title': d['title'], 'type': 'revised', 'last_visited_at': d['last_visited_at'],
+                'title': d['title'], 'type': 'revised',
+                'difficulty': d.get('difficulty', 'medium'),
+                'first_revision': is_first_revision,
+                'last_visited_at': d['last_visited_at'],
             }
             if day not in days or not any(e['id'] == entry['id'] for e in days[day]):
                 days.setdefault(day, []).append(entry)
+
+        with self._conn() as c:
+            upcoming = c.execute(
+                """SELECT id, leetcode_number, title, difficulty, remind_date,
+                          last_visited_at
+                   FROM problems
+                   WHERE deleted_at IS NULL AND remind_date IS NOT NULL
+                   AND remind_date>=? AND remind_date<?""",
+                (start, end),
+            ).fetchall()
+        today_str = date.today().isoformat()
+        for r in upcoming:
+            d = dict(r)
+            day = d['remind_date']
+            if day <= today_str:
+                continue
+            if day in days and any(e['id'] == d['id'] for e in days[day]):
+                continue
+            days.setdefault(day, []).append({
+                'id': d['id'], 'leetcode_number': d['leetcode_number'],
+                'title': d['title'], 'type': 'upcoming',
+                'difficulty': d['difficulty'],
+                'last_visited_at': d['last_visited_at'],
+            })
         return days
 
     def get_contribution_data(self):

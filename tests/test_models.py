@@ -83,16 +83,35 @@ class TestProblems:
         tmp_db.update_problem(pid, {})
         assert tmp_db.get_problem(pid)['title'] == 'Two Sum'
 
-    def test_delete(self, tmp_db, sample_problem):
+    def test_soft_delete(self, tmp_db, sample_problem):
         pid = tmp_db.create_problem(sample_problem)
         tmp_db.delete_problem(pid)
         assert tmp_db.get_problem(pid) is None
+        assert tmp_db.get_problem(pid, include_deleted=True) is not None
 
-    def test_delete_cascades_tabs(self, tmp_db, sample_problem):
+    def test_restore(self, tmp_db, sample_problem):
+        pid = tmp_db.create_problem(sample_problem)
+        tmp_db.delete_problem(pid)
+        assert tmp_db.get_problem(pid) is None
+        tmp_db.restore_problem(pid)
+        assert tmp_db.get_problem(pid) is not None
+
+    def test_permanent_delete(self, tmp_db, sample_problem):
+        pid = tmp_db.create_problem(sample_problem)
+        tmp_db.permanently_delete_problem(pid)
+        assert tmp_db.get_problem(pid, include_deleted=True) is None
+
+    def test_permanent_delete_cascades_tabs(self, tmp_db, sample_problem):
         pid = tmp_db.create_problem(sample_problem)
         tmp_db.create_tab(pid, 'Extra')
-        tmp_db.delete_problem(pid)
+        tmp_db.permanently_delete_problem(pid)
         assert tmp_db.get_tabs(pid) == []
+
+    def test_list_excludes_deleted(self, tmp_db, sample_problem):
+        pid = tmp_db.create_problem(sample_problem)
+        tmp_db.delete_problem(pid)
+        assert len(tmp_db.list_problems()) == 0
+        assert len(tmp_db.list_deleted_problems()) == 1
 
     def test_list_all(self, tmp_db, sample_problem):
         tmp_db.create_problem(sample_problem)

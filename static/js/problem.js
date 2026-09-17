@@ -86,7 +86,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     initImageDrop();
     initVideoDrop();
+    initClipboardPaste();
     lazyEnrichDescription();
+
+    if (typeof IS_DELETED !== 'undefined' && IS_DELETED) {
+        document.querySelectorAll('.editor-toolbar-right button, .add-block-row button, .prob-edit-btn').forEach(
+            btn => { btn.disabled = true; btn.style.opacity = '.3'; btn.style.pointerEvents = 'none'; }
+        );
+    }
 });
 
 // ── Lazy description sync ─────────────────────────────────
@@ -175,16 +182,73 @@ async function loadTabs() {
     }
 }
 
+let tabDragSrcIdx = null;
+
 function renderVTabs() {
     const el = document.getElementById('vtabs');
     el.innerHTML = tabs.map((t, i) =>
         `<button class="vtab${t.id === activeTabId ? ' active' : ''}"
+                 draggable="true" data-tab-idx="${i}"
                  onclick="switchTab(${t.id})" title="${t.title}">
             ${i + 1}
             <span class="vtab-label">${t.title}</span>
         </button>`
     ).join('') +
     `<button class="vtab vtab-add" onclick="createTab()" title="New approach">+</button>`;
+
+    el.querySelectorAll('.vtab[draggable]').forEach(btn => {
+        btn.addEventListener('dragstart', onTabDragStart);
+        btn.addEventListener('dragend', onTabDragEnd);
+        btn.addEventListener('dragover', onTabDragOver);
+        btn.addEventListener('drop', onTabDrop);
+    });
+}
+
+function onTabDragStart(e) {
+    tabDragSrcIdx = parseInt(this.dataset.tabIdx);
+    this.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', tabDragSrcIdx);
+}
+
+function onTabDragEnd() {
+    this.classList.remove('dragging');
+    document.querySelectorAll('.vtab').forEach(b => b.classList.remove('tab-drop-above', 'tab-drop-below'));
+    tabDragSrcIdx = null;
+}
+
+function onTabDragOver(e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const idx = parseInt(this.dataset.tabIdx);
+    document.querySelectorAll('.vtab').forEach(b => b.classList.remove('tab-drop-above', 'tab-drop-below'));
+    if (idx === tabDragSrcIdx) return;
+    const rect = this.getBoundingClientRect();
+    const midY = rect.top + rect.height / 2;
+    if (e.clientY < midY) {
+        this.classList.add('tab-drop-above');
+    } else {
+        this.classList.add('tab-drop-below');
+    }
+}
+
+async function onTabDrop(e) {
+    e.preventDefault();
+    const isAbove = this.classList.contains('tab-drop-above');
+    document.querySelectorAll('.vtab').forEach(b => b.classList.remove('tab-drop-above', 'tab-drop-below'));
+    const fromIdx = tabDragSrcIdx;
+    let toIdx = parseInt(this.dataset.tabIdx);
+    if (fromIdx === null || fromIdx === toIdx) return;
+    const [moved] = tabs.splice(fromIdx, 1);
+    if (fromIdx < toIdx) toIdx--;
+    if (!isAbove) toIdx++;
+    tabs.splice(toIdx, 0, moved);
+    renderVTabs();
+    await fetch(`/api/problems/${PROBLEM_ID}/tabs/reorder`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({tab_ids: tabs.map(t => t.id)}),
+    });
 }
 
 function switchTab(tabId) {
@@ -398,30 +462,45 @@ function onBlockDragStart(e) {
 function onBlockDragEnd() {
     this.classList.remove('dragging');
     this.setAttribute('draggable', 'false');
-    document.querySelectorAll('.block').forEach(b => b.classList.remove('drag-over'));
+    document.querySelectorAll('.block').forEach(b => {
+        b.classList.remove('drag-over', 'drop-above', 'drop-below');
+    });
     dragSrcIndex = null;
 }
 
 function onBlockDragOver(e) {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
+    const idx = parseInt(this.dataset.index);
+    if (idx === dragSrcIndex) return;
+    const rect = this.getBoundingClientRect();
+    const midY = rect.top + rect.height / 2;
+    this.classList.remove('drop-above', 'drop-below');
+    if (e.clientY < midY) {
+        this.classList.add('drop-above');
+    } else {
+        this.classList.add('drop-below');
+    }
 }
 
 function onBlockDragEnter(e) {
     e.preventDefault();
-    const idx = parseInt(this.dataset.index);
-    if (idx !== dragSrcIndex) this.classList.add('drag-over');
 }
 
-function onBlockDragLeave() {
-    this.classList.remove('drag-over');
+function onBlockDragLeave(e) {
+    const rect = this.getBoundingClientRect();
+    if (e.clientX < rect.left || e.clientX > rect.right ||
+        e.clientY < rect.top || e.clientY > rect.bottom) {
+        this.classList.remove('drop-above', 'drop-below', 'drag-over');
+    }
 }
 
 function onBlockDrop(e) {
     e.preventDefault();
-    this.classList.remove('drag-over');
+    const isAbove = this.classList.contains('drop-above');
+    this.classList.remove('drag-over', 'drop-above', 'drop-below');
     const fromIdx = dragSrcIndex;
-    const toIdx = parseInt(this.dataset.index);
+    let toIdx = parseInt(this.dataset.index);
     if (fromIdx === null || fromIdx === toIdx) return;
 
     const tab = tabs.find(t => t.id === activeTabId);
@@ -429,6 +508,8 @@ function onBlockDrop(e) {
 
     tab.content = collectTabContent();
     const [moved] = tab.content.splice(fromIdx, 1);
+    if (fromIdx < toIdx) toIdx--;
+    if (!isAbove) toIdx++;
     tab.content.splice(toIdx, 0, moved);
     renderBlocks(tab.content);
     scheduleSave();
@@ -663,16 +744,63 @@ async function doSave() {
 
 // ── Revisions ─────────────────────────────────────────────
 
+let allRevisions = [];
+
+function buildNumberLine(revisions, containerId) {
+    const el = document.getElementById(containerId);
+    if (!el) return;
+    const count = revisions.length;
+    if (count === 0) { el.innerHTML = ''; return; }
+    const maxShow = Math.min(count, 20);
+    // LTR: oldest first
+    const shown = revisions.slice(-maxShow).reverse();
+    const parts = [];
+    for (let i = 0; i < shown.length; i++) {
+        const r = shown[i];
+        const d = new Date(r.revised_at);
+        const label = d.toLocaleDateString(undefined, {month:'short', day:'numeric'});
+        parts.push(`<div class="number-line-node" title="${r.revised_at}">
+            <div class="number-line-dot"></div>
+            <div class="number-line-label">${label}</div>
+        </div>`);
+        if (i < shown.length - 1) {
+            const next = new Date(shown[i + 1].revised_at);
+            const gap = Math.max(1, Math.round((next - d) / 86400000));
+            parts.push(`<div class="number-line-connector"><span class="number-line-gap">${gap}d</span></div>`);
+        }
+    }
+    el.innerHTML = `<div class="number-line">${
+        count > maxShow ? `<div class="number-line-more">+${count - maxShow}</div><div class="number-line-connector"></div>` : ''
+    }${parts.join('')}</div>`;
+}
+
 async function loadRevisions() {
     const resp = await fetch(`/api/problems/${PROBLEM_ID}/revisions`);
-    const revisions = await resp.json();
+    allRevisions = await resp.json();
     const dotsEl = document.getElementById('revisionDots');
-    const maxDots = Math.min(revisions.length, 10);
+    const maxDots = Math.min(allRevisions.length, 10);
     dotsEl.innerHTML = Array(maxDots).fill('<div class="revision-dot"></div>').join('');
+
+    const lastInfo = document.getElementById('lastRevisedInfo');
+    if (lastInfo && allRevisions.length > 0) {
+        const last = allRevisions[0];
+        const d = new Date(last.revised_at);
+        const ago = daysSince(d);
+        lastInfo.textContent = `Last revised: ${d.toLocaleDateString()} (${ago})`;
+    }
+}
+
+function daysSince(d) {
+    const diff = Math.floor((Date.now() - d.getTime()) / 86400000);
+    if (diff === 0) return 'today';
+    if (diff === 1) return '1 day ago';
+    return `${diff} days ago`;
 }
 
 function showRevisedPopup() {
     document.getElementById('revisedModal').classList.remove('hidden');
+    document.getElementById('revisedConfirmation').classList.add('hidden');
+    buildNumberLine(allRevisions, 'revisionNumberLine');
 }
 
 function closeRevisedPopup() {
@@ -695,16 +823,64 @@ async function confirmRevised() {
     const custom = parseInt(document.getElementById('customDays').value);
     const days = custom > 0 ? custom : selectedRemindDays;
 
-    await fetch(`/api/problems/${PROBLEM_ID}/revise`, {
+    const resp = await fetch(`/api/problems/${PROBLEM_ID}/revise`, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({remind_days: days}),
     });
 
-    closeRevisedPopup();
     const countEl = document.getElementById('revisionCount');
     countEl.textContent = parseInt(countEl.textContent) + 1;
+
+    const confirm = document.getElementById('revisedConfirmation');
+    if (days && days > 0) {
+        confirm.textContent = `You will be reminded to solve this in ${days} days again`;
+        confirm.classList.remove('hidden');
+        setTimeout(() => confirm.classList.add('hidden'), 5000);
+    }
+
+    setTimeout(() => closeRevisedPopup(), days ? 1500 : 300);
     loadRevisions();
+}
+
+async function confirmRevisedNoRemind() {
+    await fetch(`/api/problems/${PROBLEM_ID}/revise`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({remind_days: 0}),
+    });
+
+    const countEl = document.getElementById('revisionCount');
+    countEl.textContent = parseInt(countEl.textContent) + 1;
+
+    const confirm = document.getElementById('revisedConfirmation');
+    confirm.textContent = 'Revised! No reminder set.';
+    confirm.classList.remove('hidden');
+    setTimeout(() => { confirm.classList.add('hidden'); closeRevisedPopup(); }, 1500);
+    loadRevisions();
+}
+
+function showRevisionHistory() {
+    document.getElementById('revisionHistoryModal').classList.remove('hidden');
+    buildNumberLine(allRevisions, 'historyNumberLine');
+    const list = document.getElementById('revisionHistoryList');
+    if (allRevisions.length === 0) {
+        list.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:8px 0">No revisions yet</div>';
+        return;
+    }
+    list.innerHTML = allRevisions.map((r, i) => {
+        const d = new Date(r.revised_at);
+        const num = allRevisions.length - i;
+        return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">
+            <span style="color:var(--success);font-weight:600;font-family:var(--font-mono);min-width:28px;font-size:12px">#${num}</span>
+            <span style="font-size:13px">${d.toLocaleDateString(undefined, {year:'numeric',month:'short',day:'numeric'})}</span>
+            <span style="font-size:11px;color:var(--text-muted);margin-left:auto">${daysSince(d)}</span>
+        </div>`;
+    }).join('');
+}
+
+function closeRevisionHistory() {
+    document.getElementById('revisionHistoryModal').classList.add('hidden');
 }
 
 // ── Edit problem ──────────────────────────────────────────
@@ -734,8 +910,19 @@ async function saveProblemEdit() {
 }
 
 async function deleteProblem() {
-    if (!confirm('Delete this problem and all its tabs?')) return;
+    if (!confirm('Move this problem to trash? It will be permanently deleted after 7 days.')) return;
     await fetch(`/api/problems/${PROBLEM_ID}`, {method: 'DELETE'});
+    window.location = '/';
+}
+
+async function recoverProblem() {
+    await fetch(`/api/problems/${PROBLEM_ID}/restore`, {method: 'POST'});
+    location.reload();
+}
+
+async function permDeleteFromView() {
+    if (!confirm('Permanently delete this problem? This cannot be undone.')) return;
+    await fetch(`/api/problems/${PROBLEM_ID}?permanent=1`, {method: 'DELETE'});
     window.location = '/';
 }
 
@@ -887,6 +1074,55 @@ async function uploadVideoFile(file) {
     } else {
         status.textContent = 'Upload failed';
     }
+}
+
+// ── Clipboard paste for images ───────────────────────────
+
+function initClipboardPaste() {
+    document.addEventListener('paste', (e) => {
+        const active = document.activeElement;
+        if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' ||
+            active.isContentEditable)) return;
+
+        const items = e.clipboardData?.items;
+        if (!items) return;
+
+        let imageFile = null;
+        for (const item of items) {
+            if (item.type.startsWith('image/')) {
+                imageFile = item.getAsFile();
+                break;
+            }
+        }
+
+        if (imageFile) {
+            e.preventDefault();
+            uploadImageFile(imageFile);
+        } else if (items.length > 0) {
+            let hasNonText = false;
+            for (const item of items) {
+                if (!item.type.startsWith('text/')) { hasNonText = true; break; }
+            }
+            if (hasNonText) {
+                showPasteWarning();
+            }
+        }
+    });
+}
+
+let pasteWarningTimeout = null;
+function showPasteWarning() {
+    let el = document.getElementById('pasteWarning');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'pasteWarning';
+        el.className = 'paste-warning';
+        document.body.appendChild(el);
+    }
+    el.textContent = 'Clipboard content is not an image';
+    el.classList.remove('hidden');
+    clearTimeout(pasteWarningTimeout);
+    pasteWarningTimeout = setTimeout(() => el.classList.add('hidden'), 3000);
 }
 
 // ── LeetCode: import my accepted submission (on-demand) ────

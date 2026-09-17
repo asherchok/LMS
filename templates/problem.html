@@ -8,7 +8,8 @@
 
 {% block head %}
 <script>const PROBLEM_ID = {{ problem.id }};
-const PROBLEM_SLUG = {{ (problem.title_slug or '') | tojson }};</script>
+const PROBLEM_SLUG = {{ (problem.title_slug or '') | tojson }};
+const IS_DELETED = {{ 'true' if is_deleted else 'false' }};</script>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
 {% endblock %}
 
@@ -16,6 +17,13 @@ const PROBLEM_SLUG = {{ (problem.title_slug or '') | tojson }};</script>
 <div class="problem-page" id="problemPage">
     <!-- Left panel: problem description -->
     <div class="problem-left" id="problemLeft">
+        {% if is_deleted %}
+        <div class="deleted-banner">
+            <span class="deleted-banner-text">This problem is in the trash. Recover it to edit.</span>
+            <button class="btn btn-sm btn-success" onclick="recoverProblem()">Recover</button>
+            <button class="btn btn-sm btn-danger" onclick="permDeleteFromView()">Delete Permanently</button>
+        </div>
+        {% endif %}
         <div class="prob-header">
             {% if problem.leetcode_number %}
             <span class="prob-number">#{{ problem.leetcode_number }}</span>
@@ -36,6 +44,8 @@ const PROBLEM_SLUG = {{ (problem.title_slug or '') | tojson }};</script>
             <div class="revision-dots" id="revisionDots"></div>
             <span class="revision-count" id="revisionCount">{{ problem.revision_count }}</span>
             <span style="font-size:12px;color:var(--text-muted)">revision{{ 's' if problem.revision_count != 1 }}</span>
+            <button class="btn btn-sm btn-secondary" onclick="showRevisionHistory()" style="margin-left:8px;font-size:11px">History</button>
+            <span id="lastRevisedInfo" style="font-size:11px;color:var(--text-muted);margin-left:8px"></span>
         </div>
 
         <div class="prob-tags" id="probTags">
@@ -135,7 +145,11 @@ const PROBLEM_SLUG = {{ (problem.title_slug or '') | tojson }};</script>
 <div class="modal-overlay hidden" id="revisedModal" onclick="if(event.target===this)closeRevisedPopup()">
     <div class="revised-popup">
         <h3>Mark as Revised for Today?</h3>
-        <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px">
+        <p style="font-size:13px;color:var(--text-secondary);margin-bottom:4px">
+            You have revised <strong>{{ problem.title }}</strong> <strong id="revisedTimesCount">{{ problem.revision_count }}</strong> time{{ 's' if problem.revision_count != 1 }}.
+        </p>
+        <div class="revision-number-line" id="revisionNumberLine"></div>
+        <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px;margin-top:8px">
             Remind me to revisit this problem in...
         </p>
         <div class="remind-options" id="remindOptions">
@@ -150,10 +164,16 @@ const PROBLEM_SLUG = {{ (problem.title_slug or '') | tojson }};</script>
                 <span style="font-size:13px;color:var(--text-secondary)">days</span>
             </div>
         </div>
-        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
-            <button class="btn btn-secondary" onclick="closeRevisedPopup()">No</button>
-            <button class="btn btn-success" onclick="confirmRevised()">Yes, Mark Revised</button>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-top:16px">
+            <div style="display:flex;gap:8px;justify-content:flex-end">
+                <button class="btn btn-secondary" onclick="closeRevisedPopup()">Cancel</button>
+                <button class="btn btn-success" onclick="confirmRevised()">Yes, Mark Revised</button>
+            </div>
+            <div style="display:flex;justify-content:center">
+                <button class="btn btn-sm no-remind-btn" onclick="confirmRevisedNoRemind()">Do not remind me</button>
+            </div>
         </div>
+        <div id="revisedConfirmation" class="revised-confirmation hidden"></div>
     </div>
 </div>
 <!-- Image modal -->
@@ -200,6 +220,20 @@ const PROBLEM_SLUG = {{ (problem.title_slug or '') | tojson }};</script>
         <div id="videoUploadStatus" style="font-size:11px;color:var(--text-muted);margin-top:6px"></div>
         <div class="form-actions">
             <button class="btn btn-secondary" onclick="closeVideoModal()">Cancel</button>
+        </div>
+    </div>
+</div>
+<!-- Revision history modal -->
+<div class="modal-overlay hidden" id="revisionHistoryModal" onclick="if(event.target===this)closeRevisionHistory()">
+    <div class="modal" style="width:420px">
+        <h2>Revision History</h2>
+        <p style="font-size:13px;color:var(--text-secondary);margin-bottom:8px">
+            You have revised <strong>{{ problem.title }}</strong> <strong id="historyTimesCount">{{ problem.revision_count }}</strong> time{{ 's' if problem.revision_count != 1 }}.
+        </p>
+        <div class="revision-number-line" id="historyNumberLine"></div>
+        <div id="revisionHistoryList" style="max-height:300px;overflow-y:auto;margin-top:12px"></div>
+        <div class="form-actions">
+            <button class="btn btn-secondary" onclick="closeRevisionHistory()">Close</button>
         </div>
     </div>
 </div>
