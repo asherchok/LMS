@@ -8,6 +8,7 @@ let currentPage = 1;
 const PAGE_SIZE = 10;
 let activeSidebarTab = 'dfr';
 let permanentDeleteNoAsk = false;
+let freezeState = {frozen: false, freeze_start: null};
 
 document.addEventListener('DOMContentLoaded', async () => {
     const now = new Date();
@@ -19,6 +20,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     openInNewTab = settings.open_in_new_tab !== 'false';
     dfrDays = parseInt(settings.dfr_days) || 1;
 
+    await loadFreezeState();
     loadAll();
 });
 
@@ -30,6 +32,71 @@ function loadAll() {
     loadContributions();
     loadProblems();
     loadLeetCode();
+}
+
+// ── Freeze ───────────────────────────────────────────────
+
+async function loadFreezeState() {
+    const resp = await fetch('/api/freeze');
+    freezeState = await resp.json();
+    updateFreezeBtn();
+}
+
+function updateFreezeBtn() {
+    const btn = document.getElementById('freezeBtn');
+    if (!btn) return;
+    const upPanel = document.getElementById('upcomingPanel');
+    if (freezeState.frozen) {
+        btn.classList.add('active');
+        btn.textContent = '▶';
+        btn.title = 'Resume revisions';
+        if (upPanel) upPanel.classList.add('frozen-panel');
+    } else {
+        btn.classList.remove('active');
+        btn.textContent = '❚❚';
+        btn.title = 'Freeze revisions';
+        if (upPanel) upPanel.classList.remove('frozen-panel');
+    }
+}
+
+function showFreezePopup() {
+    const modal = document.getElementById('freezeModal');
+    const title = document.getElementById('freezeModalTitle');
+    const body = document.getElementById('freezeModalBody');
+    const btn = document.getElementById('freezeActionBtn');
+    if (freezeState.frozen) {
+        const start = new Date(freezeState.freeze_start);
+        const now = new Date();
+        const diffH = Math.floor((now - start) / 3600000);
+        const days = Math.floor(diffH / 24);
+        const hrs = diffH % 24;
+        const dur = days > 0 ? `${days}d ${hrs}h` : `${hrs}h`;
+        const pushDays = Math.max(days, 1);
+        title.textContent = 'Resume revisions?';
+        body.textContent = `You've been frozen for ${dur}. All upcoming reminders will be pushed forward by ${pushDays} day${pushDays !== 1 ? 's' : ''}.`;
+        btn.textContent = 'Resume';
+        btn.className = 'btn btn-resume';
+    } else {
+        title.textContent = 'Need a break?';
+        body.textContent = 'This will pause all revision reminders. No new reviews will pile up while frozen. Your current due reviews will stay, but upcoming ones won\'t become overdue.';
+        btn.textContent = 'Freeze';
+        btn.className = 'btn btn-freeze';
+    }
+    modal.classList.remove('hidden');
+}
+
+function closeFreezePopup() {
+    document.getElementById('freezeModal').classList.add('hidden');
+}
+
+async function toggleFreeze() {
+    closeFreezePopup();
+    const resp = await fetch('/api/freeze', {method: 'POST'});
+    freezeState = await resp.json();
+    updateFreezeBtn();
+    loadCalendar();
+    loadReminders();
+    loadUpcoming();
 }
 
 // ── Calendar ──────────────────────────────────────────────
@@ -90,6 +157,9 @@ function renderCalendarGrid(grid, data, keepRowHeights) {
         html += '<div class="calendar-cell empty"></div>';
     }
 
+    const freezeStartDate = freezeState.frozen && freezeState.freeze_start
+        ? freezeState.freeze_start.slice(0, 10) : null;
+
     for (let d = 1; d <= daysInMonth; d++) {
         const dateStr = `${currentYear}-${String(currentMonth).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
         const isToday = dateStr === todayStr;
@@ -106,8 +176,20 @@ function renderCalendarGrid(grid, data, keepRowHeights) {
 
         const revisedCount = problems.filter(p => p.type === 'revised').length;
 
-        html += `<div class="calendar-cell${isToday ? ' today' : ''}">`;
+        let cellCls = 'calendar-cell';
+        if (isToday) cellCls += ' today';
+        if (freezeStartDate) {
+            cellCls += ' frozen-day';
+            if (dateStr === freezeStartDate) cellCls += ' freeze-start-day';
+        }
+        html += `<div class="${cellCls}">`;
         html += `<div class="calendar-date">${d}</div>`;
+        if (freezeStartDate && dateStr === freezeStartDate) {
+            const start = new Date(freezeState.freeze_start);
+            const hrs = Math.floor((new Date() - start) / 3600000);
+            const label = hrs >= 24 ? `${Math.floor(hrs/24)}d ${hrs%24}h` : `${hrs}h`;
+            html += `<div class="freeze-hours-badge">${label}</div>`;
+        }
         html += '<div class="calendar-problems">';
         for (const p of problems) {
             const label = p.leetcode_number ? `#${p.leetcode_number}` : p.title.slice(0, 6);

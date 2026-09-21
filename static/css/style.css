@@ -22,6 +22,7 @@
     --hard-dim: rgba(255,119,119,.1);
     --success: #66d9a0;
     --success-dim: rgba(102,217,160,.1);
+    --cyan: #00d4d4;
     --border: rgba(255,255,255,.06);
     --border-light: rgba(255,255,255,.1);
     --shadow: 0 4px 16px rgba(0,0,0,.3);
@@ -57,6 +58,7 @@
     --hard-dim: rgba(208,64,64,.1);
     --success: #1e9050;
     --success-dim: rgba(30,144,80,.1);
+    --cyan: #0099a0;
     --border: rgba(0,0,0,.08);
     --border-light: rgba(0,0,0,.12);
     --shadow: 0 4px 16px rgba(0,0,0,.08);
@@ -1253,13 +1255,24 @@ a:hover { color: var(--accent-hover); }
     font-family: var(--font-mono);
     font-size: 13px;
     padding: 12px 16px;
-    resize: vertical;
+    resize: none;
     min-height: 100px;
     outline: none;
     line-height: 1.6;
 }
 
-.add-block-row { display: flex; gap: 6px; padding: 2px 0; flex-wrap: wrap; }
+.add-block-row {
+    display: flex;
+    gap: 6px;
+    padding-bottom: 6px;
+    flex-wrap: wrap;
+    position: sticky;
+    top: -16px;
+    margin-top: -12px;
+    padding-top: 28px;
+    z-index: 5;
+    background: var(--bg-primary);
+}
 
 /* ── Markdown toolbar color/highlight dots ────────────── */
 .md-color-group {
@@ -1574,6 +1587,25 @@ a:hover { color: var(--accent-hover); }
     border-bottom: 3px solid var(--accent) !important;
     border-bottom-style: solid !important;
 }
+#blocksContainer.toolbar-drop-end {
+    border-bottom: 3px solid var(--accent);
+}
+.add-block-btn.dragging {
+    opacity: .5;
+}
+.add-block-ghost {
+    position: fixed;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    z-index: 9999;
+    opacity: .8;
+    padding: 4px 10px;
+    font-size: 12px;
+    background: var(--bg-card);
+    border: 1.5px solid var(--accent);
+    border-radius: 4px;
+    color: var(--text-primary);
+}
 .block-toolbar:hover {
     background: var(--accent-dim);
 }
@@ -1871,6 +1903,7 @@ a:hover { color: var(--accent-hover); }
     color: var(--hard) !important;
     border-color: var(--hard) !important;
     background: var(--hard-dim) !important;
+    justify-content: center;
 }
 .no-remind-btn:hover {
     background: var(--hard) !important;
@@ -1933,6 +1966,99 @@ a:hover { color: var(--accent-hover); }
 }
 .reminder-card-wrap.upcoming-drop-below {
     border-bottom: 3px solid var(--accent);
+}
+
+/* ── Freeze button & modal ────────────────────────────── */
+.freeze-btn {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    border: 2px solid var(--cyan, #00d4d4);
+    background: transparent;
+    color: var(--cyan, #00d4d4);
+    cursor: pointer;
+    font-size: 10px;
+    letter-spacing: -2px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background .15s, color .15s;
+    padding: 0;
+    line-height: 1;
+}
+.freeze-btn:hover { background: rgba(0,212,212,.12); }
+.freeze-btn.active {
+    background: var(--cyan, #00d4d4);
+    color: #000;
+    animation: freeze-pulse 2s ease-in-out infinite;
+}
+@keyframes freeze-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(0,212,212,.4); }
+    50% { box-shadow: 0 0 8px 3px rgba(0,212,212,.25); }
+}
+.freeze-modal { max-width: 380px; }
+.freeze-modal .btn-freeze {
+    background: var(--cyan, #00d4d4);
+    border-color: var(--cyan, #00d4d4);
+    color: #000;
+}
+.freeze-modal .btn-freeze:hover { filter: brightness(1.1); }
+.freeze-modal .btn-resume {
+    background: var(--success);
+    border-color: var(--success);
+    color: #000;
+}
+.freeze-modal .btn-resume:hover { filter: brightness(1.1); }
+
+/* ── Calendar & sidebar freeze tinting ────────────────── */
+.calendar-cell.frozen-day:not(.empty) {
+    background: rgba(0,212,212,.15);
+}
+.calendar-cell.frozen-day:not(.empty):hover {
+    background: rgba(0,212,212,.22);
+}
+.calendar-cell.freeze-start-day:not(.empty) {
+    background: rgba(0,212,212,.28);
+}
+.calendar-cell.freeze-start-day:not(.empty):hover {
+    background: rgba(0,212,212,.34);
+}
+.sidebar-panel.frozen-panel .reminder-card {
+    background: rgba(0,212,212,.13);
+    border-color: rgba(0,212,212,.35);
+}
+.sidebar-panel.frozen-panel .reminder-card:hover {
+    background: rgba(0,212,212,.20);
+    border-color: rgba(0,212,212,.50);
+}
+[data-theme="light"] .calendar-cell.frozen-day:not(.empty) {
+    background: rgba(0,153,160,.14);
+}
+[data-theme="light"] .calendar-cell.frozen-day:not(.empty):hover {
+    background: rgba(0,153,160,.20);
+}
+[data-theme="light"] .calendar-cell.freeze-start-day:not(.empty) {
+    background: rgba(0,153,160,.26);
+}
+[data-theme="light"] .calendar-cell.freeze-start-day:not(.empty):hover {
+    background: rgba(0,153,160,.32);
+}
+[data-theme="light"] .sidebar-panel.frozen-panel .reminder-card {
+    background: rgba(0,153,160,.12);
+    border-color: rgba(0,153,160,.35);
+}
+[data-theme="light"] .sidebar-panel.frozen-panel .reminder-card:hover {
+    background: rgba(0,153,160,.18);
+    border-color: rgba(0,153,160,.50);
+}
+.freeze-hours-badge {
+    position: absolute;
+    top: 3px;
+    right: 5px;
+    font-size: 9px;
+    font-weight: 700;
+    color: var(--cyan, #00d4d4);
+    font-family: var(--font-mono);
 }
 
 /* ── Responsive ────────────────────────────────────────── */

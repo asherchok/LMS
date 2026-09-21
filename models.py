@@ -230,6 +230,21 @@ class Database:
             ).fetchall()
             return [dict(r) | {'tags': json.loads(r['tags'])} for r in rows]
 
+    def unfreeze_reminders(self, freeze_start_iso):
+        freeze_date = freeze_start_iso[:10]
+        days_frozen = (date.today() - date.fromisoformat(freeze_date)).days
+        if days_frozen <= 0:
+            return
+        modifier = f'+{days_frozen} days'
+        with self._conn() as c:
+            c.execute(
+                """UPDATE problems SET remind_date = date(remind_date, ?)
+                   WHERE deleted_at IS NULL
+                   AND remind_date IS NOT NULL
+                   AND remind_date > ?""",
+                (modifier, freeze_date),
+            )
+
     def auto_cleanup_deleted(self, days=7):
         cutoff = (datetime.now() - timedelta(days=days)).isoformat()
         with self._conn() as c:

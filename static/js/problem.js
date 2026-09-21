@@ -5,6 +5,7 @@ let saveTimeout = null;
 let monacoReady = false;
 let selectedRemindDays = 7;
 let defaultLanguage = 'python';
+let _toolbarInsertIdx = null;
 
 // ── Monaco loader ─────────────────────────────────────────
 
@@ -87,6 +88,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     initImageDrop();
     initVideoDrop();
     initClipboardPaste();
+    initToolbarDrag();
     lazyEnrichDescription();
 
     if (typeof IS_DELETED !== 'undefined' && IS_DELETED) {
@@ -469,6 +471,7 @@ function onBlockDragEnd() {
 }
 
 function onBlockDragOver(e) {
+    if (_toolbarDragType) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     const idx = parseInt(this.dataset.index);
@@ -515,6 +518,104 @@ function onBlockDrop(e) {
     scheduleSave();
 }
 
+// ── Toolbar button drag-to-insert ────────────────────────
+
+let _tbDrag = null;
+
+function initToolbarDrag() {
+    document.querySelectorAll('.add-block-btn').forEach(btn => {
+        let pressTimer = null;
+
+        btn.addEventListener('mousedown', e => {
+            if (e.button !== 0) return;
+            const startX = e.clientX, startY = e.clientY;
+            pressTimer = setTimeout(() => {
+                _tbDrag = {type: btn.dataset.blockType, ghost: null};
+                btn.classList.add('dragging');
+                const ghost = btn.cloneNode(true);
+                ghost.className = 'add-block-ghost';
+                ghost.style.left = e.clientX + 'px';
+                ghost.style.top = e.clientY + 'px';
+                document.body.appendChild(ghost);
+                _tbDrag.ghost = ghost;
+            }, 300);
+
+            const onMove = ev => {
+                if (!_tbDrag && (Math.abs(ev.clientX - startX) > 5 || Math.abs(ev.clientY - startY) > 5)) {
+                    clearTimeout(pressTimer);
+                }
+                if (!_tbDrag) return;
+                _tbDrag.ghost.style.left = ev.clientX + 'px';
+                _tbDrag.ghost.style.top = ev.clientY + 'px';
+                updateToolbarDropIndicator(ev.clientY);
+            };
+
+            const onUp = () => {
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+                clearTimeout(pressTimer);
+                if (_tbDrag) {
+                    const type = _tbDrag.type;
+                    _tbDrag.ghost.remove();
+                    btn.classList.remove('dragging');
+                    const idx = resolveToolbarDropIdx();
+                    clearToolbarDropIndicators();
+                    _tbDrag = null;
+                    if (idx !== null) {
+                        _toolbarInsertIdx = idx;
+                        if (type === 'lc-import') importLeetCodeCode();
+                        else addBlock(type);
+                    }
+                } else {
+                    const type = btn.dataset.blockType;
+                    if (type === 'lc-import') importLeetCodeCode();
+                    else addBlock(type);
+                }
+            };
+
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        });
+    });
+}
+
+function updateToolbarDropIndicator(clientY) {
+    const container = document.getElementById('blocksContainer');
+    const blocks = [...container.querySelectorAll('.block')];
+    blocks.forEach(b => b.classList.remove('drop-above', 'drop-below'));
+    container.classList.remove('toolbar-drop-end');
+    for (const block of blocks) {
+        const rect = block.getBoundingClientRect();
+        if (clientY >= rect.top && clientY <= rect.bottom) {
+            if (clientY < rect.top + rect.height / 2) block.classList.add('drop-above');
+            else block.classList.add('drop-below');
+            return;
+        }
+    }
+    if (blocks.length) {
+        const lastRect = blocks[blocks.length - 1].getBoundingClientRect();
+        if (clientY > lastRect.bottom) container.classList.add('toolbar-drop-end');
+        const firstRect = blocks[0].getBoundingClientRect();
+        if (clientY < firstRect.top) blocks[0].classList.add('drop-above');
+    }
+}
+
+function resolveToolbarDropIdx() {
+    const container = document.getElementById('blocksContainer');
+    const blocks = [...container.querySelectorAll('.block')];
+    for (let i = 0; i < blocks.length; i++) {
+        if (blocks[i].classList.contains('drop-above')) return i;
+        if (blocks[i].classList.contains('drop-below')) return i + 1;
+    }
+    if (container.classList.contains('toolbar-drop-end')) return blocks.length;
+    return null;
+}
+
+function clearToolbarDropIndicators() {
+    document.querySelectorAll('.block').forEach(b => b.classList.remove('drop-above', 'drop-below'));
+    document.getElementById('blocksContainer').classList.remove('toolbar-drop-end');
+}
+
 function langOptions(selected) {
     const langs = ['python','cpp','javascript','typescript','java','c','csharp','go',
                    'rust','ruby','swift','kotlin','scala','sql','shell','plaintext'];
@@ -540,7 +641,16 @@ function addBlock(type) {
     const block = type === 'code'
         ? {type: 'code', language: defaultLanguage, content: ''}
         : {type: 'markdown', content: ''};
-    tab.content.push(block);
+    _insertBlock(tab, block);
+}
+
+function _insertBlock(tab, block) {
+    if (_toolbarInsertIdx !== null) {
+        tab.content.splice(_toolbarInsertIdx, 0, block);
+        _toolbarInsertIdx = null;
+    } else {
+        tab.content.push(block);
+    }
     renderBlocks(tab.content);
     scheduleSave();
 }
@@ -559,6 +669,8 @@ function editMarkdown(idx) {
     const preview = document.getElementById(`md-preview-${idx}`);
     const edit = document.getElementById(`md-edit-${idx}`);
     const toolbar = document.getElementById(`md-toolbar-${idx}`);
+    const h = Math.max(100, preview.offsetHeight);
+    edit.style.height = h + 'px';
     preview.classList.add('hidden');
     edit.classList.remove('hidden');
     if (toolbar) toolbar.style.display = 'flex';
@@ -953,9 +1065,7 @@ function insertImageBlock(src) {
     const tab = tabs.find(t => t.id === activeTabId);
     if (!tab) return;
     tab.content = collectTabContent();
-    tab.content.push({type: 'image', src, caption: ''});
-    renderBlocks(tab.content);
-    scheduleSave();
+    _insertBlock(tab, {type: 'image', src, caption: ''});
 }
 
 function initImageDrop() {
@@ -1035,9 +1145,7 @@ function insertVideoBlock(block) {
     const tab = tabs.find(t => t.id === activeTabId);
     if (!tab) return;
     tab.content = collectTabContent();
-    tab.content.push(block);
-    renderBlocks(tab.content);
-    scheduleSave();
+    _insertBlock(tab, block);
 }
 
 function initVideoDrop() {
@@ -1161,35 +1269,13 @@ async function importLeetCodeCode() {
         const detail = await codeResp.json();
         if (!detail.code) { setStatus('Could not retrieve the submission code.', 'var(--hard)'); return; }
 
-        const when = accepted.timestamp
-            ? new Date(accepted.timestamp * 1000).toLocaleDateString() : '';
         const lang = (detail.lang && detail.lang.name) || accepted.lang;
-        const blocks = [
-            {type: 'markdown',
-             content: `**Imported from LeetCode** — ${accepted.statusDisplay || 'Accepted'}`
-                 + `${when ? ' · ' + when : ''}`
-                 + `${accepted.runtime ? ' · ' + accepted.runtime : ''}`
-                 + `${accepted.memory ? ' · ' + accepted.memory : ''}`},
-            {type: 'code', language: mapLcLang(lang), content: detail.code},
-        ];
+        const block = {type: 'code', language: mapLcLang(lang), content: detail.code};
 
-        // Land the import in its OWN new tab so existing notes are never
-        // touched, even if this problem already had approaches.
-        saveCurrentTab();
-        const tabResp = await fetch(`/api/problems/${PROBLEM_ID}/tabs`, {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({title: when ? `LeetCode · ${when}` : 'LeetCode Submission'}),
-        });
-        const newTab = await tabResp.json();
-        await fetch(`/api/tabs/${newTab.id}`, {
-            method: 'PUT', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({content: blocks}),
-        });
-        await loadTabs();
-        switchTab(newTab.id);
+        const tab = tabs.find(t => t.id === activeTabId);
+        if (!tab) { setStatus('No active tab to import into.', 'var(--hard)'); return; }
+        _insertBlock(tab, block);
 
-        // Activate the problem on its real solve date (clears the imported flag
-        // so it now shows on the calendar on the day it was actually solved).
         if (accepted.timestamp) {
             const solvedIso = new Date(accepted.timestamp * 1000).toISOString();
             fetch(`/api/problems/${PROBLEM_ID}`, {
@@ -1197,7 +1283,7 @@ async function importLeetCodeCode() {
                 body: JSON.stringify({created_at: solvedIso, imported: 0}),
             });
         }
-        setStatus('Imported into a new tab.', 'var(--success)');
+        setStatus('Imported code block into current tab.', 'var(--success)');
     } catch {
         setStatus('Failed to reach LeetCode.', 'var(--hard)');
     }

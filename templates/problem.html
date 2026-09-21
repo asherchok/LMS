@@ -127,16 +127,16 @@ const IS_DELETED = {{ 'true' if is_deleted else 'false' }};</script>
                     <button class="btn btn-secondary btn-sm" onclick="deleteTab()">Delete Tab</button>
                 </div>
             </div>
-            <div id="blocksContainer"></div>
-            <div class="add-block-row">
-                <button class="btn btn-secondary btn-sm" onclick="addBlock('code')">+ Code</button>
-                <button class="btn btn-secondary btn-sm" onclick="addBlock('markdown')">+ Commentary</button>
-                <button class="btn btn-secondary btn-sm" onclick="addBlock('image')">+ Image</button>
-                <button class="btn btn-secondary btn-sm" onclick="addBlock('video')">+ Video</button>
-                <button class="btn btn-secondary btn-sm" id="importLcBtn" onclick="importLeetCodeCode()"
-                        title="Import your accepted submission from LeetCode into a new tab">⭳ Import my LeetCode code</button>
+            <div class="add-block-row" id="addBlockRow">
+                <button class="btn btn-secondary btn-sm add-block-btn" data-block-type="code">+ Code</button>
+                <button class="btn btn-secondary btn-sm add-block-btn" data-block-type="markdown">+ Commentary</button>
+                <button class="btn btn-secondary btn-sm add-block-btn" data-block-type="image">+ Image</button>
+                <button class="btn btn-secondary btn-sm add-block-btn" data-block-type="video">+ Video</button>
+                <button class="btn btn-secondary btn-sm add-block-btn" data-block-type="lc-import" id="importLcBtn"
+                        title="Import your accepted submission from LeetCode as a code block">⭳ Import my LeetCode code</button>
+                <span id="lcImportStatus" style="font-size:11px;color:var(--text-muted);align-self:center"></span>
             </div>
-            <div id="lcImportStatus" style="font-size:11px;color:var(--text-muted);margin-top:4px"></div>
+            <div id="blocksContainer"></div>
         </div>
     </div>
 </div>
@@ -164,12 +164,12 @@ const IS_DELETED = {{ 'true' if is_deleted else 'false' }};</script>
                 <span style="font-size:13px;color:var(--text-secondary)">days</span>
             </div>
         </div>
-        <div style="display:flex;flex-direction:column;gap:8px;margin-top:16px">
-            <div style="display:flex;gap:8px;justify-content:flex-end">
-                <button class="btn btn-secondary" onclick="closeRevisedPopup()">Cancel</button>
-                <button class="btn btn-success" onclick="confirmRevised()">Yes, Mark Revised</button>
-            </div>
-            <div style="display:flex;justify-content:center">
+        <div style="display:flex;justify-content:center;margin-top:16px">
+            <div style="display:inline-flex;flex-direction:column;gap:8px;align-items:stretch">
+                <div style="display:flex;gap:8px">
+                    <button class="btn btn-secondary" onclick="closeRevisedPopup()">Cancel</button>
+                    <button class="btn btn-success" onclick="confirmRevised()">Yes, Mark Revised</button>
+                </div>
                 <button class="btn btn-sm no-remind-btn" onclick="confirmRevisedNoRemind()">Do not remind me</button>
             </div>
         </div>

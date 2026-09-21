@@ -9,7 +9,7 @@ from providers import (get_provider, sensitive_setting_keys, PROVIDERS,
                        PUBLIC_PROFILE, PUBLIC_RECENT, AUTH_BACKFILL, SUBMISSION_CODE)
 
 app = Flask(__name__)
-VERSION = '1.3.0'
+VERSION = '1.4.0'
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE, 'config.json')
@@ -181,6 +181,25 @@ def api_reminders():
 def api_upcoming():
     days = int(request.args.get('days', 7))
     return jsonify(db.get_upcoming_reminders(days))
+
+
+@app.route('/api/freeze', methods=['GET'])
+def api_freeze_status():
+    fs = db.get_setting('freeze_start', '')
+    return jsonify({'frozen': bool(fs), 'freeze_start': fs or None})
+
+
+@app.route('/api/freeze', methods=['POST'])
+def api_toggle_freeze():
+    fs = db.get_setting('freeze_start', '')
+    if fs:
+        db.unfreeze_reminders(fs)
+        db.set_setting('freeze_start', '')
+        return jsonify({'frozen': False})
+    else:
+        now = datetime.now().isoformat()
+        db.set_setting('freeze_start', now)
+        return jsonify({'frozen': True, 'freeze_start': now})
 
 
 @app.route('/api/calendar/<int:year>/<int:month>')

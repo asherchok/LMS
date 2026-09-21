@@ -1,6 +1,7 @@
 {% extends 'base.html' %}
 
 {% block header_actions %}
+<button class="freeze-btn" id="freezeBtn" onclick="showFreezePopup()" title="Freeze/Resume revisions">❚❚</button>
 <button class="btn-ghost" onclick="showSettings()" title="Settings">⚙</button>
 <button class="btn btn-primary" style="margin-left:8px" onclick="showNewProblemModal()">+ New Problem</button>
 {% endblock %}
@@ -133,6 +134,21 @@
         <div class="form-actions">
             <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
             <button class="btn btn-primary" onclick="createProblem()">Create</button>
+        </div>
+    </div>
+</div>
+
+<!-- Freeze Modal -->
+<div class="modal-overlay hidden" id="freezeModal" onclick="if(event.target===this)closeFreezePopup()">
+    <div class="modal freeze-modal">
+        <h2 id="freezeModalTitle">Need a break?</h2>
+        <p id="freezeModalBody" style="font-size:13px;color:var(--text-secondary);margin-bottom:16px">
+            This will pause all revision reminders. No new reviews will pile up while frozen.
+            Your current due reviews will stay, but upcoming ones won't become overdue.
+        </p>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+            <button class="btn btn-secondary" onclick="closeFreezePopup()">Cancel</button>
+            <button class="btn" id="freezeActionBtn" onclick="toggleFreeze()">Freeze</button>
         </div>
     </div>
 </div>
