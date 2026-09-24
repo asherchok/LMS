@@ -9,12 +9,14 @@ export function MarkdownBlock({
   block,
   onChange,
   onRemove,
-  handleProps,
+  onGripDown,
+  onGripUp,
 }: {
   block: MarkdownBlockT
   onChange: (patch: Partial<MarkdownBlockT>) => void
   onRemove: () => void
-  handleProps?: React.HTMLAttributes<HTMLSpanElement> & { draggable?: boolean }
+  onGripDown?: () => void
+  onGripUp?: () => void
 }) {
   const [editing, setEditing] = useState(false)
   const ta = useRef<HTMLTextAreaElement>(null)
@@ -45,7 +47,7 @@ export function MarkdownBlock({
   const tbBtn = 'rounded px-1.5 py-0.5 text-xs hover:bg-card-hover'
 
   return (
-    <BlockShell label="Commentary" onRemove={onRemove} handleProps={handleProps}>
+    <BlockShell label="Commentary" onRemove={onRemove} onGripDown={onGripDown} onGripUp={onGripUp}>
       {editing ? (
         <div>
           <div

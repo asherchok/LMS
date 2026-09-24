@@ -58,6 +58,8 @@ export default function Problem() {
   const [importStatus, setImportStatus] = useState<{ msg: string; color: string } | null>(null)
   const [leftPct, setLeftPct] = useState(45)
   const containerRef = useRef<HTMLDivElement>(null)
+  // Where a drag-to-insert (or media modal insert) should drop the new block.
+  const pendingInsertIdx = useRef<number | undefined>(undefined)
 
   const canEdit = !!problem && !problem.deleted_at
   const editor = useProblemEditor(pid, canEdit)
@@ -110,11 +112,12 @@ export default function Problem() {
   }
 
   function insertBlock(block: Block) {
-    editor.addBlock(block)
+    editor.addBlock(block, pendingInsertIdx.current)
+    pendingInsertIdx.current = undefined
     setModal(null)
   }
 
-  async function importLeetCode() {
+  async function importLeetCode(index?: number) {
     if (!problem?.title_slug) {
       setImportStatus({ msg: 'No LeetCode slug — set the LeetCode # first.', color: 'var(--hard)' })
       return
@@ -133,11 +136,10 @@ export default function Problem() {
         return
       }
       const lang = detail.lang?.name || accepted.lang
-      editor.addBlock({
-        type: 'code',
-        language: mapLcLang(lang, defaultLang),
-        content: detail.code,
-      })
+      editor.addBlock(
+        { type: 'code', language: mapLcLang(lang, defaultLang), content: detail.code },
+        index,
+      )
       if (accepted.timestamp) {
         endpoints.updateProblem(pid, {
           created_at: new Date(accepted.timestamp * 1000).toISOString(),
@@ -194,8 +196,14 @@ export default function Problem() {
             defaultLanguage={defaultLang}
             canEdit={canEdit}
             importStatus={importStatus}
-            onOpenImage={() => setModal('image')}
-            onOpenVideo={() => setModal('video')}
+            onOpenImage={(idx) => {
+              pendingInsertIdx.current = idx
+              setModal('image')
+            }}
+            onOpenVideo={(idx) => {
+              pendingInsertIdx.current = idx
+              setModal('video')
+            }}
             onImport={importLeetCode}
           />
         </div>

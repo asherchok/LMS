@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, send_from_directory
+from flask import Flask, render_template, request, jsonify, send_from_directory, abort
 import json
 import os
 import re
@@ -13,6 +13,18 @@ VERSION = '1.4.0'
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE, 'config.json')
+
+# Built React SPA (Phase 3). When present, Flask serves it and the classic
+# Jinja templates become a fallback for environments without a build.
+FRONTEND_DIST = os.path.join(BASE, 'frontend', 'dist')
+
+
+def _spa_available():
+    return os.path.isfile(os.path.join(FRONTEND_DIST, 'index.html'))
+
+
+def _serve_spa():
+    return send_from_directory(FRONTEND_DIST, 'index.html')
 
 
 def load_config():
@@ -43,6 +55,8 @@ db = Database(os.path.join(config['data_dir'], 'lms.db'))
 @app.route('/')
 def landing():
     db.auto_cleanup_deleted()
+    if _spa_available():
+        return _serve_spa()
     return render_template('landing.html')
 
 
@@ -54,6 +68,8 @@ def problem_view(pid):
     is_deleted = bool(p.get('deleted_at'))
     if not is_deleted:
         db.update_last_visited(pid)
+    if _spa_available():
+        return _serve_spa()  # React Router renders the problem client-side
     return render_template('problem.html', problem=p, is_deleted=is_deleted)
 
 
@@ -766,6 +782,20 @@ def api_disk_usage():
         'file_count': file_count,
         'data_dir': data_dir,
     })
+
+
+# ── SPA fallback (must stay last: it matches any unregistered path) ─────
+# Serves the built React assets (/assets/…, /favicon.png) and hands any other
+# non-API path to index.html so React Router can handle client-side routes.
+
+@app.route('/<path:path>')
+def spa_catch_all(path):
+    if path.startswith('api/') or not _spa_available():
+        abort(404)
+    full = os.path.join(FRONTEND_DIST, path)
+    if os.path.isfile(full):
+        return send_from_directory(FRONTEND_DIST, path)
+    return _serve_spa()
 
 
 if __name__ == '__main__':

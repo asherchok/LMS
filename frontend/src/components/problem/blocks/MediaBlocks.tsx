@@ -1,19 +1,22 @@
 import { BlockShell } from './BlockShell'
 import type { ImageBlock as ImageBlockT, VideoBlock as VideoBlockT } from '../../../types'
 
-type Handle = React.HTMLAttributes<HTMLSpanElement> & { draggable?: boolean }
+interface GripProps {
+  onGripDown?: () => void
+  onGripUp?: () => void
+}
 
 export function ImageBlock({
   block,
   onRemove,
-  handleProps,
+  onGripDown,
+  onGripUp,
 }: {
   block: ImageBlockT
   onRemove: () => void
-  handleProps?: Handle
-}) {
+} & GripProps) {
   return (
-    <BlockShell label="Image" onRemove={onRemove} handleProps={handleProps}>
+    <BlockShell label="Image" onRemove={onRemove} onGripDown={onGripDown} onGripUp={onGripUp}>
       <div className="p-2">
         <img src={block.src} alt={block.caption || ''} className="mx-auto max-h-[480px] rounded" />
       </div>
@@ -24,14 +27,14 @@ export function ImageBlock({
 export function VideoBlock({
   block,
   onRemove,
-  handleProps,
+  onGripDown,
+  onGripUp,
 }: {
   block: VideoBlockT
   onRemove: () => void
-  handleProps?: Handle
-}) {
+} & GripProps) {
   return (
-    <BlockShell label="Video" onRemove={onRemove} handleProps={handleProps}>
+    <BlockShell label="Video" onRemove={onRemove} onGripDown={onGripDown} onGripUp={onGripUp}>
       <div className="p-2">
         {block.source_type === 'youtube' && block.video_id ? (
           <div className="relative aspect-video">

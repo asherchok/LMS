@@ -51,12 +51,14 @@ export function CodeBlock({
   block,
   onChange,
   onRemove,
-  handleProps,
+  onGripDown,
+  onGripUp,
 }: {
   block: CodeBlockT
   onChange: (patch: Partial<CodeBlockT>) => void
   onRemove: () => void
-  handleProps?: React.HTMLAttributes<HTMLSpanElement> & { draggable?: boolean }
+  onGripDown?: () => void
+  onGripUp?: () => void
 }) {
   const theme = useThemeVersion()
   const [height, setHeight] = useState(120)
@@ -83,11 +85,13 @@ export function CodeBlock({
     <BlockShell
       label="Code"
       onRemove={onRemove}
-      handleProps={handleProps}
+      onGripDown={onGripDown}
+      onGripUp={onGripUp}
       extra={
         <select
           value={block.language}
           onChange={(e) => onChange({ language: e.target.value })}
+          onMouseDown={(e) => e.stopPropagation()}
           className="rounded border border-border bg-bg px-1 py-0.5 text-xs"
         >
           {LANGS.map(([v, l]) => (

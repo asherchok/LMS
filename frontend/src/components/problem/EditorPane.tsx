@@ -18,9 +18,9 @@ export function EditorPane({
   defaultLanguage: string
   canEdit: boolean
   importStatus: { msg: string; color: string } | null
-  onOpenImage: () => void
-  onOpenVideo: () => void
-  onImport: () => void
+  onOpenImage: (index?: number) => void
+  onOpenVideo: (index?: number) => void
+  onImport: (index?: number) => void
 }) {
   const activeTab = editor.tabs.find((t) => t.id === editor.activeId)
   const [title, setTitle] = useState(activeTab?.title ?? '')
@@ -62,10 +62,10 @@ export function EditorPane({
           status={editor.status}
           canEdit={canEdit}
           importStatus={importStatus}
-          onAddCode={() =>
-            editor.addBlock({ type: 'code', language: defaultLanguage, content: '' })
+          onAddCode={(index) =>
+            editor.addBlock({ type: 'code', language: defaultLanguage, content: '' }, index)
           }
-          onAddMarkdown={() => editor.addBlock({ type: 'markdown', content: '' })}
+          onAddMarkdown={(index) => editor.addBlock({ type: 'markdown', content: '' }, index)}
           onOpenImage={onOpenImage}
           onOpenVideo={onOpenVideo}
           onImport={onImport}
