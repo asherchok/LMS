@@ -5,12 +5,14 @@ Works on macOS, Linux, and Windows with Python 3.8+.
 import subprocess
 import sys
 import os
+import shutil
 import webbrowser
 import time
 
 DIR = os.path.dirname(os.path.abspath(__file__))
 VENV = os.path.join(DIR, '.venv')
 REQ = os.path.join(DIR, 'requirements.txt')
+FRONTEND = os.path.join(DIR, 'frontend')
 PORT = 5001
 
 
@@ -53,6 +55,25 @@ def setup():
     )
 
 
+def build_frontend():
+    """Build the React SPA so Flask can serve it. Falls back silently to the
+    classic Jinja UI if the frontend or Node/npm isn't available."""
+    if not os.path.isdir(FRONTEND):
+        return
+    npm = shutil.which('npm')
+    if not npm:
+        print('[LMS] npm not found — serving the classic UI.')
+        return
+    try:
+        if not os.path.isdir(os.path.join(FRONTEND, 'node_modules')):
+            print('[LMS] Installing frontend dependencies (first run)...')
+            subprocess.check_call([npm, 'install'], cwd=FRONTEND)
+        print('[LMS] Building frontend...')
+        subprocess.check_call([npm, 'run', 'build'], cwd=FRONTEND)
+    except (subprocess.CalledProcessError, OSError) as e:
+        print(f'[LMS] Frontend build failed ({e}); serving the classic UI.')
+
+
 def set_macos_icon():
     """Set the LMS icon on .command file if on macOS and not already set."""
     if sys.platform != 'darwin':
@@ -79,6 +100,7 @@ def set_macos_icon():
 
 def main():
     setup()
+    build_frontend()
     set_macos_icon()
     url = f'http://localhost:{PORT}'
     print(f'[LMS] Starting server at {url}')

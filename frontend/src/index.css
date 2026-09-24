@@ -1,0 +1,76 @@
+@import 'tailwindcss';
+
+/* Dark mode is driven by data-theme="dark" on <html> (set before paint in
+   index.html). The app is dark-first: base utilities describe light, `dark:`
+   variants describe dark, and data-theme defaults to "dark". */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* ── Design tokens ───────────────────────────────────────────
+   Defined as plain CSS variables so they flip at runtime per theme, then
+   exposed to Tailwind via `@theme inline` so utilities like bg-card / text-fg
+   / border-ink resolve to the live value in whichever theme is active. */
+:root {
+  --bg: #f5f0e8;
+  --card: #ede6d8;
+  --card-hover: #e3dbcb;
+  --fg: #2a2a2a;
+  --muted: #6b6b6b;
+  --subtle: #8a8a8a;
+  --border: rgba(0, 0, 0, 0.08);
+  --border-strong: rgba(0, 0, 0, 0.12);
+  --ink: rgba(0, 0, 0, 0.35);
+  --accent: #b88a00;
+  --easy: #1e9050;
+  --medium: #b88a00;
+  --hard: #d04040;
+}
+
+[data-theme='dark'] {
+  --bg: #1a1a1a;
+  --card: #282828;
+  --card-hover: #303030;
+  --fg: #e8e8e8;
+  --muted: #999999;
+  --subtle: #666666;
+  --border: rgba(255, 255, 255, 0.06);
+  --border-strong: rgba(255, 255, 255, 0.1);
+  --ink: rgba(255, 255, 255, 0.32);
+  --accent: #ffd666;
+  --easy: #66d9a0;
+  --medium: #ffd666;
+  --hard: #ff7777;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-card: var(--card);
+  --color-card-hover: var(--card-hover);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-subtle: var(--subtle);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-ink: var(--ink);
+  --color-accent: var(--accent);
+  --color-easy: var(--easy);
+  --color-medium: var(--medium);
+  --color-hard: var(--hard);
+
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'SF Mono', 'Fira Code', 'JetBrains Mono', Consolas, monospace;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+}
