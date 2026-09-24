@@ -1,4 +1,4 @@
-@import "tailwindcss";
+@import 'tailwindcss';
 
 /* Dark mode is driven by data-theme="dark" on <html> (set before paint in
    index.html). The app is dark-first: base utilities describe light, `dark:`
@@ -25,7 +25,7 @@
   --hard: #d04040;
 }
 
-[data-theme="dark"] {
+[data-theme='dark'] {
   --bg: #1a1a1a;
   --card: #282828;
   --card-hover: #303030;
@@ -56,8 +56,8 @@
   --color-medium: var(--medium);
   --color-hard: var(--hard);
 
-  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-mono: "SF Mono", "Fira Code", "JetBrains Mono", Consolas, monospace;
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'SF Mono', 'Fira Code', 'JetBrains Mono', Consolas, monospace;
 }
 
 @layer base {
