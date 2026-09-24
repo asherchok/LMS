@@ -24,6 +24,11 @@ export default tseslint.config(
     rules: {
       ...reactHooks.configs['recommended-latest'].rules,
       'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
+      // React-Compiler rule: forbids setState inside effects. We intentionally
+      // fetch initial data in effects and setState with the result (a pattern
+      // React's docs bless for data loading), so this one is off. The essential
+      // rules-of-hooks / exhaustive-deps / purity checks stay on.
+      'react-hooks/set-state-in-effect': 'off',
     },
   },
   // Turn off ESLint formatting rules that would fight Prettier. Keep last.

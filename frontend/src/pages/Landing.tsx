@@ -1,60 +1,142 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Header } from '../components/Header'
-import { api, type AppConfig } from '../lib/api'
+import { Sidebar } from '../components/landing/Sidebar'
+import { Calendar } from '../components/landing/Calendar'
+import { StatsRow } from '../components/landing/StatsRow'
+import { Topics } from '../components/landing/Topics'
+import { ContributionGraph } from '../components/landing/ContributionGraph'
+import { LeetCodePanel } from '../components/landing/LeetCodePanel'
+import { NewProblemModal } from '../components/modals/NewProblemModal'
+import { SettingsModal } from '../components/modals/SettingsModal'
+import { FreezeModal } from '../components/modals/FreezeModal'
+import { useLandingData } from '../hooks/useLandingData'
+import { endpoints } from '../lib/endpoints'
 
-/** Placeholder landing page. Phase 1 replaces the body with the real calendar,
- *  sidebar, stats, and panels. For now it verifies the theme + API proxy. */
 export default function Landing() {
-  const [config, setConfig] = useState<AppConfig | null>(null)
-  const [apiError, setApiError] = useState<string | null>(null)
+  const d = useLandingData()
+  const [filters, setFilters] = useState<string[]>([])
+  const [modal, setModal] = useState<'new' | 'settings' | 'freeze' | null>(null)
+  const [syncing, setSyncing] = useState(false)
 
-  useEffect(() => {
-    api
-      .get<AppConfig>('/api/config')
-      .then(setConfig)
-      .catch((e) => setApiError(e.message))
-  }, [])
+  const toggleFilter = (tag: string) =>
+    setFilters((f) => (f.includes(tag) ? f.filter((t) => t !== tag) : [...f, tag]))
+
+  async function sync() {
+    setSyncing(true)
+    try {
+      const res = await endpoints.leetcodeSync()
+      d.setProfile(res.profile)
+      d.reloadCalendar()
+      d.reloadStats()
+      d.reloadContributions()
+      d.reloadProblems()
+    } catch {
+      /* surfaced elsewhere; keep the page responsive */
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  function reloadAll() {
+    d.reloadProblems()
+    d.reloadStats()
+    d.reloadCalendar()
+    d.reloadContributions()
+    d.reloadReminders()
+    d.reloadUpcoming()
+  }
+
+  const headerBtn =
+    'rounded-md border-2 border-ink bg-card px-3 py-1.5 text-sm text-fg transition-colors hover:bg-card-hover'
 
   return (
     <div className="min-h-screen">
       <Header
         actions={
-          <button className="rounded-md border-2 border-ink bg-card px-3 py-1.5 text-sm font-medium text-fg transition-colors hover:bg-card-hover">
-            + New Problem
-          </button>
+          <>
+            <button
+              onClick={() => setModal('freeze')}
+              title={d.freeze.frozen ? 'Resume revisions' : 'Freeze revisions'}
+              className={`${headerBtn} ${d.freeze.frozen ? 'border-accent text-accent' : ''}`}
+            >
+              {d.freeze.frozen ? '▶' : '❚❚'}
+            </button>
+            <button onClick={() => setModal('settings')} title="Settings" className={headerBtn}>
+              ⚙
+            </button>
+            <button
+              onClick={() => setModal('new')}
+              className="rounded-md border-2 border-accent bg-accent/15 px-3 py-1.5 text-sm font-medium text-fg hover:bg-accent/25"
+            >
+              + New Problem
+            </button>
+          </>
         }
       />
-      <main className="mx-auto max-w-5xl px-4 py-10 sm:px-6">
-        <h2 className="text-2xl font-bold">Phase 0 shell</h2>
-        <p className="mt-2 text-muted">
-          React + Vite + TypeScript + Tailwind is live. Theme toggle and the API proxy both work.
-        </p>
 
-        <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
-          {/* Full class names (no interpolation) so Tailwind's scanner keeps them. */}
-          {[
-            { label: 'easy', color: 'text-easy' },
-            { label: 'medium', color: 'text-medium' },
-            { label: 'hard', color: 'text-hard' },
-          ].map((d) => (
-            <div key={d.label} className="rounded-lg border-2 border-ink bg-card p-4 text-center">
-              <div className={`text-3xl font-bold ${d.color}`}>—</div>
-              <div className="mt-1 text-xs uppercase tracking-wide text-muted">{d.label}</div>
-            </div>
-          ))}
+      <div className="mx-auto grid max-w-7xl gap-6 px-4 py-6 sm:px-6 lg:grid-cols-[340px_1fr]">
+        <div className="order-2 lg:order-1">
+          <Sidebar
+            reminders={d.reminders}
+            upcoming={d.upcoming}
+            problems={d.problems}
+            activeFilters={filters}
+            openInNewTab={d.openInNewTab}
+            onRemoveFilter={(t) => setFilters((f) => f.filter((x) => x !== t))}
+            onClearFilters={() => setFilters([])}
+            onReschedule={d.reschedule}
+          />
         </div>
 
-        <div className="mt-6 rounded-lg border border-border bg-card p-4 text-sm">
-          <div className="font-medium text-fg">Backend health check</div>
-          {config ? (
-            <p className="mt-1 text-easy">Connected to Flask API — v{config.version}</p>
-          ) : apiError ? (
-            <p className="mt-1 text-hard">API unreachable ({apiError}). Start Flask on :5001.</p>
-          ) : (
-            <p className="mt-1 text-muted">Checking…</p>
-          )}
-        </div>
-      </main>
+        <main className="order-1 min-w-0 lg:order-2">
+          <Calendar
+            year={d.year}
+            month={d.month}
+            data={d.calendar}
+            problems={d.problems}
+            activeFilters={filters}
+            freeze={d.freeze}
+            openInNewTab={d.openInNewTab}
+            onChangeMonth={d.changeMonth}
+            onReschedule={d.reschedule}
+          />
+          <LeetCodePanel profile={d.profile} onSync={sync} syncing={syncing} />
+          <StatsRow stats={d.stats} />
+          <Topics
+            tagCounts={d.stats?.tag_counts ?? {}}
+            activeFilters={filters}
+            onToggle={toggleFilter}
+            onReset={() => setFilters([])}
+          />
+          <ContributionGraph data={d.contributions} />
+        </main>
+      </div>
+
+      {modal === 'new' && (
+        <NewProblemModal
+          openInNewTab={d.openInNewTab}
+          onClose={() => setModal(null)}
+          onCreated={d.reloadProblems}
+        />
+      )}
+      {modal === 'settings' && (
+        <SettingsModal
+          openInNewTab={d.openInNewTab}
+          setOpenInNewTab={d.setOpenInNewTab}
+          onClose={() => setModal(null)}
+          onDataChanged={reloadAll}
+        />
+      )}
+      {modal === 'freeze' && (
+        <FreezeModal
+          freeze={d.freeze}
+          onClose={() => setModal(null)}
+          onConfirm={() => {
+            d.toggleFreeze()
+            setModal(null)
+          }}
+        />
+      )}
     </div>
   )
 }
