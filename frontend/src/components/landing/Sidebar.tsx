@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import type { Problem, Reminder } from '../../types'
+import type { FreezeState, Problem, Reminder } from '../../types'
 import { Badge } from '../ui/Badge'
 import { Pagination } from './Pagination'
 import { daysOverdue, daysUntil } from '../../lib/date'
@@ -13,6 +13,7 @@ interface SidebarProps {
   problems: Problem[]
   activeFilters: string[]
   openInNewTab: boolean
+  freeze: FreezeState
   onRemoveFilter: (tag: string) => void
   onClearFilters: () => void
   onReschedule: (id: number, date: string) => void
@@ -29,15 +30,20 @@ function ReminderCard({
   r,
   openInNewTab,
   status,
+  frozen,
   draggable,
   onDragStart,
 }: {
   r: Reminder
   openInNewTab: boolean
   status: React.ReactNode
+  frozen?: boolean
   draggable?: boolean
   onDragStart?: (e: React.DragEvent) => void
 }) {
+  const frozenCls = frozen
+    ? 'border-accent/35 bg-accent/10 hover:bg-accent/15'
+    : 'border-border bg-card hover:bg-card-hover'
   return (
     <div className="flex items-stretch gap-1">
       {draggable && (
@@ -52,7 +58,7 @@ function ReminderCard({
       )}
       <button
         onClick={() => openProblem(r.id, openInNewTab)}
-        className="flex-1 rounded-md border border-border bg-card p-2 text-left transition-colors hover:bg-card-hover"
+        className={`flex-1 rounded-md border p-2 text-left transition-colors ${frozenCls}`}
       >
         <div className="truncate text-sm font-medium">
           {r.leetcode_number ? `#${r.leetcode_number} ` : ''}
@@ -73,6 +79,7 @@ export function Sidebar({
   problems,
   activeFilters,
   openInNewTab,
+  freeze,
   onRemoveFilter,
   onClearFilters,
   onReschedule,
@@ -80,6 +87,8 @@ export function Sidebar({
   const [tab, setTab] = useState<'dfr' | 'upcoming'>('dfr')
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
+  const [dragPid, setDragPid] = useState<number | null>(null)
+  const [dropTarget, setDropTarget] = useState<{ id: number; pos: 'above' | 'below' } | null>(null)
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase()
@@ -116,7 +125,13 @@ export function Sidebar({
             </button>
           ))}
         </div>
-        <div className="mt-2 max-h-[30vh] space-y-1.5 overflow-y-auto pr-1">
+        <div
+          className="mt-2 max-h-[30vh] space-y-1.5 overflow-y-auto pr-1"
+          onDragEnd={() => {
+            setDragPid(null)
+            setDropTarget(null)
+          }}
+        >
           {tab === 'dfr' ? (
             reminders.length === 0 ? (
               <p className="py-2 text-sm text-muted">No problems due for review</p>
@@ -133,21 +148,48 @@ export function Sidebar({
           ) : upcoming.length === 0 ? (
             <p className="py-2 text-sm text-muted">Nothing coming up in the next 7 days</p>
           ) : (
-            upcoming.map((r) => (
+            upcoming.map((r, idx) => (
               <div
                 key={r.id}
-                onDragOver={(e) => e.preventDefault()}
+                onDragOver={(e) => {
+                  e.preventDefault()
+                  if (!dragPid || dragPid === r.id) return
+                  const rect = e.currentTarget.getBoundingClientRect()
+                  const pos = e.clientY < rect.top + rect.height / 2 ? 'above' : 'below'
+                  setDropTarget({ id: r.id, pos })
+                }}
+                onDragLeave={() => setDropTarget((d) => (d?.id === r.id ? null : d))}
                 onDrop={(e) => {
                   e.preventDefault()
+                  setDropTarget(null)
                   const pid = e.dataTransfer.getData('text/plain')
-                  if (pid && Number(pid) !== r.id) onReschedule(Number(pid), r.remind_date)
+                  if (!pid || Number(pid) === r.id) return
+                  const rect = e.currentTarget.getBoundingClientRect()
+                  const above = e.clientY < rect.top + rect.height / 2
+                  const insertIdx = above ? idx : idx + 1
+                  const targetDate = upcoming[insertIdx]
+                    ? upcoming[insertIdx].remind_date
+                    : r.remind_date
+                  onReschedule(Number(pid), targetDate)
                 }}
+                className={[
+                  dropTarget?.id === r.id && dropTarget.pos === 'above'
+                    ? 'border-t-[3px] border-t-accent'
+                    : '',
+                  dropTarget?.id === r.id && dropTarget.pos === 'below'
+                    ? 'border-b-[3px] border-b-accent'
+                    : '',
+                ].join(' ')}
               >
                 <ReminderCard
                   r={r}
                   openInNewTab={openInNewTab}
+                  frozen={freeze.frozen}
                   draggable
-                  onDragStart={(e) => e.dataTransfer.setData('text/plain', String(r.id))}
+                  onDragStart={(e) => {
+                    e.dataTransfer.setData('text/plain', String(r.id))
+                    setDragPid(r.id)
+                  }}
                   status={<span className="text-muted">In {daysUntil(r.remind_date)}d</span>}
                 />
               </div>

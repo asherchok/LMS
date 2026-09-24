@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CalendarData, CalendarEntry, Problem, FreezeState } from '../../types'
 import { MONTHS, localDateKey, todayKey } from '../../lib/date'
 import { openProblem } from '../../lib/nav'
@@ -43,6 +43,8 @@ export function Calendar({
 }: CalendarProps) {
   const [tip, setTip] = useState<Tip | null>(null)
   const [dropDate, setDropDate] = useState<string | null>(null)
+  const gridRef = useRef<HTMLDivElement>(null)
+  const [lockedRows, setLockedRows] = useState<string | undefined>(undefined)
 
   const allowedIds = useMemo(() => {
     if (activeFilters.length === 0) return null
@@ -53,6 +55,36 @@ export function Calendar({
 
   const today = todayKey()
   const freezeStart = freeze.frozen && freeze.freeze_start ? freeze.freeze_start.slice(0, 10) : null
+  const freezeElapsed = useMemo(() => {
+    if (!freezeStart) return 0
+    const ms = Date.now() - new Date(freezeStart + 'T00:00:00').getTime()
+    return Math.max(0, Math.floor(ms / 86_400_000))
+  }, [freezeStart])
+
+  // Lock grid row heights after initial render so topic filters don't cause layout shift.
+  useEffect(() => {
+    setLockedRows(undefined)
+  }, [year, month])
+  useEffect(() => {
+    if (lockedRows !== undefined) return
+    const grid = gridRef.current
+    if (!grid) return
+    requestAnimationFrame(() => {
+      const cells = grid.children
+      const cols = 7
+      const rows = Math.ceil(cells.length / cols)
+      const heights: number[] = []
+      for (let r = 0; r < rows; r++) {
+        let max = 0
+        for (let c = 0; c < cols; c++) {
+          const cell = cells[r * cols + c] as HTMLElement | undefined
+          if (cell) max = Math.max(max, cell.offsetHeight)
+        }
+        if (max > 0) heights.push(max)
+      }
+      if (heights.length) setLockedRows(heights.map((h) => h + 'px').join(' '))
+    })
+  }, [lockedRows, data])
 
   // Build the day cells with a leading blank offset (Mon-first weeks).
   const firstDow = (() => {
@@ -97,7 +129,11 @@ export function Calendar({
         </button>
       </div>
 
-      <div className="grid grid-cols-7 gap-1">
+      <div
+        ref={gridRef}
+        className="grid grid-cols-7 gap-1"
+        style={lockedRows ? { gridTemplateRows: lockedRows } : undefined}
+      >
         {DAY_LABELS.map((d) => (
           <div key={d} className="pb-1 text-center text-[11px] font-medium text-muted">
             {d}
@@ -133,7 +169,7 @@ export function Calendar({
               <div className="text-[11px] font-medium text-muted">{day}</div>
               {freezeStart === dateStr && (
                 <div className="absolute right-1 top-1 rounded bg-accent/20 px-1 text-[9px] text-accent">
-                  frozen
+                  frozen {freezeElapsed}d
                 </div>
               )}
               <div className="mt-0.5 flex flex-wrap gap-0.5">

@@ -20,6 +20,8 @@ export function MarkdownBlock({
 }) {
   const [editing, setEditing] = useState(false)
   const ta = useRef<HTMLTextAreaElement>(null)
+  const previewRef = useRef<HTMLDivElement>(null)
+  const [editHeight, setEditHeight] = useState<number | undefined>(undefined)
   const value = block.content
 
   function wrap(before: string, after: string) {
@@ -110,11 +112,20 @@ export function MarkdownBlock({
             value={value}
             onChange={(e) => onChange({ content: e.target.value })}
             onBlur={() => setEditing(false)}
-            className="min-h-28 w-full resize-y bg-transparent p-3 font-mono text-sm outline-none"
+            className="min-h-28 w-full resize-none bg-transparent p-3 font-mono text-sm outline-none"
+            style={editHeight ? { height: editHeight } : undefined}
           />
         </div>
       ) : (
-        <div onClick={() => setEditing(true)} className="cursor-text p-3">
+        <div
+          ref={previewRef}
+          onClick={() => {
+            const h = previewRef.current?.offsetHeight
+            setEditHeight(h && h > 100 ? h : undefined)
+            setEditing(true)
+          }}
+          className="cursor-text p-3"
+        >
           {value.trim() ? (
             <MarkdownView source={value} className="prose-sm max-w-none" />
           ) : (

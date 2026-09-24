@@ -33,7 +33,7 @@ export function Pagination({
       <button className={btn} disabled={page <= 1} onClick={() => onGo(page - 1)}>
         ‹
       </button>
-      <div className="flex items-center gap-1">
+      <div className="flex min-w-[140px] items-center justify-center gap-1">
         {pageNumbers(page, totalPages).map((p, i) =>
           p === '...' ? (
             <span key={`e${i}`} className="px-1 text-xs text-subtle">

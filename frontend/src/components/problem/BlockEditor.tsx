@@ -146,7 +146,7 @@ export function BlockEditor({
 
   return (
     <div>
-      <div className="mb-3 flex flex-wrap items-center gap-2">
+      <div className="sticky -top-4 z-10 -mt-3 mb-3 flex flex-wrap items-center gap-2 bg-bg pt-7">
         {TOOLBAR.map((b) => (
           <button
             key={b.type}

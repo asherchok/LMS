@@ -63,6 +63,8 @@ export default function Problem() {
 
   const canEdit = !!problem && !problem.deleted_at
   const editor = useProblemEditor(pid, canEdit)
+  const [pasteWarn, setPasteWarn] = useState(false)
+  const pasteTimer = useRef<ReturnType<typeof setTimeout>>(null)
 
   const loadProblem = useCallback(() => endpoints.problem(pid, true).then(setProblem), [pid])
   const loadRevisions = useCallback(() => endpoints.revisions(pid).then(setRevisions), [pid])
@@ -80,8 +82,11 @@ export default function Problem() {
       const el = document.activeElement as HTMLElement | null
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable))
         return
-      for (const item of e.clipboardData?.items ?? []) {
+      const items = e.clipboardData?.items ?? []
+      let hasImage = false
+      for (const item of items) {
         if (item.type.startsWith('image/')) {
+          hasImage = true
           const file = item.getAsFile()
           if (file) {
             e.preventDefault()
@@ -90,6 +95,11 @@ export default function Problem() {
           }
           return
         }
+      }
+      if (!hasImage && items.length > 0) {
+        setPasteWarn(true)
+        if (pasteTimer.current) clearTimeout(pasteTimer.current)
+        pasteTimer.current = setTimeout(() => setPasteWarn(false), 3000)
       }
     }
     document.addEventListener('paste', onPaste)
@@ -231,6 +241,11 @@ export default function Problem() {
       )}
       {modal === 'image' && <ImageModal onClose={() => setModal(null)} onInsert={insertBlock} />}
       {modal === 'video' && <VideoModal onClose={() => setModal(null)} onInsert={insertBlock} />}
+      {pasteWarn && (
+        <div className="fixed bottom-5 left-1/2 z-50 -translate-x-1/2 rounded-md bg-hard px-4 py-2 text-sm text-white shadow-lg">
+          Clipboard content is not an image
+        </div>
+      )}
     </div>
   )
 }

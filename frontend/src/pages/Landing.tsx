@@ -82,6 +82,7 @@ export default function Landing() {
             problems={d.problems}
             activeFilters={filters}
             openInNewTab={d.openInNewTab}
+            freeze={d.freeze}
             onRemoveFilter={(t) => setFilters((f) => f.filter((x) => x !== t))}
             onClearFilters={() => setFilters([])}
             onReschedule={d.reschedule}

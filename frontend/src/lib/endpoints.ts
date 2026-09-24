@@ -142,4 +142,47 @@ export const endpoints = {
     api.post<{ logged_in: boolean; username: string }>('/api/leetcode/login', { session, csrf }),
   leetcodeLogout: () => api.post<{ logged_in: boolean }>('/api/leetcode/logout'),
   leetcodeBackfill: () => api.post<BackfillResult>('/api/leetcode/backfill'),
+  leetcodeProfile: (username: string) =>
+    api.get<LeetCodeProfile>(`/api/leetcode/profile/${encodeURIComponent(username)}`),
+
+  // multi-provider routes
+  providers: () =>
+    api.get<
+      {
+        id: string
+        name: string
+        base_url: string
+        capabilities: string[]
+        auth_fields: { key: string; label: string }[]
+        logged_in: boolean
+        username: string | null
+      }[]
+    >('/api/providers'),
+  providerProblem: (platform: string, number: number) =>
+    api.get<FetchedProblem>(`/api/providers/${platform}/problem/${number}`),
+  providerProfile: (platform: string, username: string) =>
+    api.get<LeetCodeProfile>(
+      `/api/providers/${platform}/profile/${encodeURIComponent(username)}`,
+    ),
+  providerCached: (platform: string) =>
+    api.get<Partial<LeetCodeProfile>>(`/api/providers/${platform}/cached`),
+  providerSync: (platform: string) =>
+    api.post<SyncResult>(`/api/providers/${platform}/sync`),
+  providerAuth: (platform: string) =>
+    api.get<AuthState>(`/api/providers/${platform}/auth?validate=1`),
+  providerLogin: (platform: string, session: string, csrf: string) =>
+    api.post<{ logged_in: boolean; username: string }>(
+      `/api/providers/${platform}/login`,
+      { session, csrf },
+    ),
+  providerLogout: (platform: string) =>
+    api.post<{ logged_in: boolean }>(`/api/providers/${platform}/logout`),
+  providerBackfill: (platform: string) =>
+    api.post<BackfillResult>(`/api/providers/${platform}/backfill`),
+  providerSubmissions: (platform: string, slug: string) =>
+    api.get<{ submissions: Submission[] }>(
+      `/api/providers/${platform}/submissions/${encodeURIComponent(slug)}`,
+    ),
+  providerSubmissionCode: (platform: string, sid: string) =>
+    api.get<SubmissionDetail>(`/api/providers/${platform}/submission/${encodeURIComponent(sid)}`),
 }
