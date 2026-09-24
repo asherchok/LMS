@@ -16,6 +16,7 @@ export interface Problem {
   deleted_at: string | null
   platform: string
   external_id: string | null
+  title_slug: string | null
 }
 
 /** A badge shown on a calendar day. */
@@ -68,6 +69,45 @@ export interface FreezeState {
 export interface DiskUsage {
   total_mb: number
   file_count: number
+}
+
+export interface CodeBlock {
+  type: 'code'
+  language: string
+  content: string
+}
+export interface MarkdownBlock {
+  type: 'markdown'
+  content: string
+}
+export interface ImageBlock {
+  type: 'image'
+  src: string
+  caption?: string
+}
+export interface VideoBlock {
+  type: 'video'
+  src: string
+  source_type: string
+  video_id?: string | null
+  thumbnail?: string | null
+}
+export type Block = CodeBlock | MarkdownBlock | ImageBlock | VideoBlock
+
+export interface Tab {
+  id: number
+  problem_id: number
+  title: string
+  content: Block[]
+  sort_order?: number
+  created_at: string
+  updated_at: string
+}
+
+export interface Revision {
+  id: number
+  problem_id: number
+  revised_at: string
 }
 
 export interface Settings {

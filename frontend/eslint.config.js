@@ -29,6 +29,11 @@ export default tseslint.config(
       // React's docs bless for data loading), so this one is off. The essential
       // rules-of-hooks / exhaustive-deps / purity checks stay on.
       'react-hooks/set-state-in-effect': 'off',
+      // Allow `_`-prefixed intentional unused, and rest-sibling omission.
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        { argsIgnorePattern: '^_', varsIgnorePattern: '^_', ignoreRestSiblings: true },
+      ],
     },
   },
   // Turn off ESLint formatting rules that would fight Prettier. Keep last.

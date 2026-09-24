@@ -1,6 +1,7 @@
 import { api, type AppConfig } from './api'
 import type {
   AuthState,
+  Block,
   CalendarData,
   Contributions,
   DiskUsage,
@@ -8,9 +9,24 @@ import type {
   LeetCodeProfile,
   Problem,
   Reminder,
+  Revision,
   Settings,
   Stats,
+  Tab,
 } from '../types'
+
+export interface Submission {
+  id: number
+  statusDisplay: string
+  lang: string
+  timestamp: number
+  runtime?: string
+  memory?: string
+}
+export interface SubmissionDetail {
+  code: string
+  lang?: { name: string }
+}
 
 export interface NewProblemInput {
   leetcode_number: number | null
@@ -54,11 +70,52 @@ export const endpoints = {
   // problems
   problems: () => api.get<Problem[]>('/api/problems'),
   deletedProblems: () => api.get<Problem[]>('/api/problems/deleted'),
+  problem: (id: number, includeDeleted = false) =>
+    api.get<Problem>(`/api/problems/${id}${includeDeleted ? '?include_deleted=1' : ''}`),
   createProblem: (input: NewProblemInput) => api.post<{ id: number }>('/api/problems', input),
-  updateProblem: (id: number, patch: Partial<Problem>) =>
+  updateProblem: (id: number, patch: Partial<Problem> & { imported?: number }) =>
     api.put<{ ok: boolean }>(`/api/problems/${id}`, patch),
+  deleteProblem: (id: number) => api.del<{ ok: boolean }>(`/api/problems/${id}`),
   restoreProblem: (id: number) => api.post<{ ok: boolean }>(`/api/problems/${id}/restore`),
   permanentDelete: (id: number) => api.del<{ ok: boolean }>(`/api/problems/${id}?permanent=1`),
+  enrich: (id: number) =>
+    api.post<{ enriched: boolean; problem?: Problem }>(`/api/problems/${id}/enrich`),
+
+  // tabs
+  tabs: (pid: number) => api.get<Tab[]>(`/api/problems/${pid}/tabs`),
+  createTab: (pid: number, title: string) =>
+    api.post<{ id: number }>(`/api/problems/${pid}/tabs`, { title }),
+  renameTab: (tid: number, title: string) =>
+    api.put<{ ok: boolean }>(`/api/tabs/${tid}`, { title }),
+  saveTab: (tid: number, content: Block[]) =>
+    api.put<{ ok: boolean }>(`/api/tabs/${tid}`, { content }),
+  deleteTab: (tid: number) => api.del<{ ok: boolean }>(`/api/tabs/${tid}`),
+  reorderTabs: (pid: number, tabIds: number[]) =>
+    api.post<{ ok: boolean }>(`/api/problems/${pid}/tabs/reorder`, { tab_ids: tabIds }),
+
+  // revisions
+  revisions: (pid: number) => api.get<Revision[]>(`/api/problems/${pid}/revisions`),
+  revise: (pid: number, remindDays: number) =>
+    api.post<{ ok: boolean }>(`/api/problems/${pid}/revise`, { remind_days: remindDays }),
+
+  // media
+  videoThumbnail: (url: string) =>
+    api.post<{ type: string; video_id: string | null; thumbnail: string | null }>(
+      '/api/video-thumbnail',
+      { url },
+    ),
+  uploadFile: async (file: File): Promise<{ url?: string }> => {
+    const fd = new FormData()
+    fd.append('file', file)
+    const res = await fetch('/api/upload', { method: 'POST', body: fd })
+    return res.json()
+  },
+
+  // leetcode submissions (code import)
+  leetcodeSubmissions: (slug: string) =>
+    api.get<{ submissions: Submission[] }>(`/api/leetcode/submissions/${slug}`),
+  leetcodeSubmissionCode: (id: number) =>
+    api.get<SubmissionDetail>(`/api/leetcode/submission/${id}`),
 
   // calendar / reminders / stats / activity
   calendar: (year: number, month: number) =>
